@@ -6,11 +6,13 @@ global main
 main:
 push bp
 mov bp, sp
-sub sp, 8
+sub sp, 28
 xor ax, ax
 mov [bp-6], ax
 xor ax, ax
 mov [bp-8], ax
+xor ax, ax
+mov [bp-10], ax
 mov ax, 0
 mov [bp-8], ax
 mov ax, [bp-8]
@@ -40,20 +42,81 @@ mov [bp+si-6], ax
 mov ax, dx
 inc ax
 mov [bp-8], ax
-mov ax, 0
+mov ax, [bp-8]
+dec ax
 mov si, ax
 shl si, 1
 mov ax, [bp+si-6]
+mov [bp-10], ax
+mov ax, [bp-8]
+push ax
+mov ax, 1
+pop bx
+sub bx, ax
+mov ax, bx
+mov [bp-8], ax
+mov ax, [bp-10]
+call rt_print_num16
+mov ax, [bp-8]
+dec ax
+mov si, ax
+shl si, 1
+mov ax, [bp+si-6]
+mov [bp-10], ax
+mov ax, [bp-8]
+push ax
+mov ax, 1
+pop bx
+sub bx, ax
+mov ax, bx
+mov [bp-8], ax
+mov ax, [bp-10]
+call rt_print_num16
+mov ax, [bp-8]
+dec ax
+mov si, ax
+shl si, 1
+mov ax, [bp+si-6]
+mov [bp-10], ax
+mov ax, [bp-8]
+push ax
+mov ax, 1
+pop bx
+sub bx, ax
+mov ax, bx
+mov [bp-8], ax
+mov ax, [bp-10]
+call rt_print_num16
+xor ax, ax
+mov [bp-12], ax
+xor ax, ax
+mov [bp-14], ax
+mov ax, 1234
+mov [bp-12], ax
+mov ax, 0
+mov [bp-14], ax
+xor ax, ax
+mov [bp-20], ax
+xor ax, ax
+mov [bp-26], ax
+xor ax, ax
+mov [bp-28], ax
+mov ax, 0
+mov [bp-28], ax
+mov ax, 0
+mov si, ax
+shl si, 1
+mov ax, [bp+si-20]
 call rt_print_num16
 mov ax, 1
 mov si, ax
 shl si, 1
-mov ax, [bp+si-6]
+mov ax, [bp+si-20]
 call rt_print_num16
 mov ax, 2
 mov si, ax
 shl si, 1
-mov ax, [bp+si-6]
+mov ax, [bp+si-20]
 call rt_print_num16
 mov ax, 0
 mov sp, bp
