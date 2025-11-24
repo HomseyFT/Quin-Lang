@@ -121,15 +121,16 @@ class CodeGen8086:
 
     def _emit_expr(self, e: A.Expr, ctx: Context):
         if isinstance(e, A.Literal):
+            # Order matters: in Python, bool is a subclass of int, so check bool first.
+            if isinstance(e.value, bool):
+                self.em.emit(f"mov ax, {1 if e.value else 0}")
+                return
             if isinstance(e.value, int):
                 self.em.emit(f"mov ax, {e.value}")
                 return
             if isinstance(e.value, str):
                 lbl = self.em.add_string(e.value)
                 self.em.emit(f"mov ax, {lbl}")
-                return
-            if isinstance(e.value, bool):
-                self.em.emit(f"mov ax, {1 if e.value else 0}")
                 return
         if isinstance(e, A.Identifier):
             off = self.fn_locals.get(e.name)
@@ -180,6 +181,39 @@ class CodeGen8086:
         if isinstance(e, A.Binary):
             lt = ctx.get_type(e.left)
             rt = ctx.get_type(e.right)
+            # Short-circuit logical ops on bools
+            if e.op == '&&':
+                # if left is false, result is false; else evaluate right
+                end_lbl = self.em.unique_label("AND_END")
+                false_lbl = self.em.unique_label("AND_FALSE")
+                self._emit_expr(e.left, ctx)       # AX = left
+                self.em.emit("cmp ax, 0")
+                self.em.emit(f"je {false_lbl}")   # left == 0 -> false
+                self._emit_expr(e.right, ctx)      # AX = right
+                self.em.emit("cmp ax, 0")
+                self.em.emit(f"je {false_lbl}")   # right == 0 -> false
+                self.em.emit("mov ax, 1")
+                self.em.emit(f"jmp {end_lbl}")
+                self.em.label(false_lbl)
+                self.em.emit("xor ax, ax")        # false
+                self.em.label(end_lbl)
+                return
+            if e.op == '||':
+                # if left is true, result is true; else evaluate right
+                end_lbl = self.em.unique_label("OR_END")
+                true_lbl = self.em.unique_label("OR_TRUE")
+                self._emit_expr(e.left, ctx)       # AX = left
+                self.em.emit("cmp ax, 0")
+                self.em.emit(f"jne {true_lbl}")   # left != 0 -> true
+                self._emit_expr(e.right, ctx)      # AX = right
+                self.em.emit("cmp ax, 0")
+                self.em.emit(f"jne {true_lbl}")   # right != 0 -> true
+                self.em.emit("xor ax, ax")        # false
+                self.em.emit(f"jmp {end_lbl}")
+                self.em.label(true_lbl)
+                self.em.emit("mov ax, 1")
+                self.em.label(end_lbl)
+                return
             if lt == Str and rt == Str and e.op in ('==', '!=', '<', '<=', '>', '>='):
                 # string compare
                 self._emit_expr(e.left, ctx)   # AX = left

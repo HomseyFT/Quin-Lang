@@ -77,14 +77,21 @@ class Lexer:
         if c == '-':
             self._add_token(TokenType.MINUS); return
         if c == '+':
+            # '+' or future '+=' (not yet used)
             self._add_token(TokenType.PLUS); return
         if c == ';':
             self._add_token(TokenType.SEMICOLON); return
         if c == '*':
             self._add_token(TokenType.STAR); return
+        if c == '|':
+            if self._match('|'):
+                self._add_token(TokenType.OR_OR); return
         if c == ':':
             self._add_token(TokenType.COLON); return
         if c == '&':
+            # '&&' logical and, '&' address-of
+            if self._match('&'):
+                self._add_token(TokenType.AND_AND); return
             self._add_token(TokenType.AMP); return
         if c == '/':
             if self._match('/'):

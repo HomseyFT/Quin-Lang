@@ -152,15 +152,16 @@ class SemanticAnalyzer:
 
     def _analyze_expr(self, e: A.Expr, scope: Scope) -> Type:
         if isinstance(e, A.Literal):
+            # Order matters: in Python, bool is a subclass of int, so check bool first.
+            if isinstance(e.value, bool):
+                self.ctx.set_type(e, Bool)
+                return Bool
             if isinstance(e.value, int):
                 self.ctx.set_type(e, Int)
                 return Int
             if isinstance(e.value, str):
                 self.ctx.set_type(e, Str)
                 return Str
-            if isinstance(e.value, bool):
-                self.ctx.set_type(e, Bool)
-                return Bool
             self.ctx.set_type(e, Void)
             return Void
         if isinstance(e, A.Identifier):
@@ -191,6 +192,11 @@ class SemanticAnalyzer:
                     self.ctx.set_type(e, Bool)
                     return Bool
                 raise SemanticError("Comparison requires operands of same type")
+            if e.op in ('&&', '||'):
+                if lt == Bool and rt == Bool:
+                    self.ctx.set_type(e, Bool)
+                    return Bool
+                raise SemanticError("Logical && and || require bool operands")
             raise SemanticError(f"Unknown operator {e.op}")
         if isinstance(e, A.Index):
             arr_t = self._analyze_expr(e.array, scope)

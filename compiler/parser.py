@@ -161,7 +161,23 @@ class Parser:
         return A.ExprStmt(expr)
 
     def _expression(self) -> A.Expr:
-        return self._assignment()
+        return self._or()
+
+    def _or(self) -> A.Expr:
+        expr = self._and()
+        while self._match(TokenType.OR_OR):
+            op = self._previous().lexeme
+            right = self._and()
+            expr = A.Binary(expr, op, right)
+        return expr
+
+    def _and(self) -> A.Expr:
+        expr = self._equality()
+        while self._match(TokenType.AND_AND):
+            op = self._previous().lexeme
+            right = self._equality()
+            expr = A.Binary(expr, op, right)
+        return expr
 
     def _assignment(self) -> A.Expr:
         # assignment handled at statement level for simplicity

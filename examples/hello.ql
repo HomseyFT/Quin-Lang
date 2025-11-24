@@ -59,7 +59,26 @@ fn main(): int {
     print(buf2[0]);    // 0
     print(buf2[1]);    // 0
     print(buf2[2]);    // 0
+    println(" ");
     println("Hello");
+    print("My Name Is Nathan");
+
+    let za: bool;
+    let zb: bool;
+    let zc: bool;
+
+    za = true;
+    zb = false;
+
+    zc = zb && zb;         // false
+    zc = za || zb;         // true
+
+    if (za && !zb) {
+        println(1);
+    }
+    if (za || zb && false) {
+        println(2);
+    }
 
     return 0;
 }

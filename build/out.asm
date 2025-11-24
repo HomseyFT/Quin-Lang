@@ -6,7 +6,7 @@ global main
 main:
 push bp
 mov bp, sp
-sub sp, 30
+sub sp, 36
 xor ax, ax
 mov [bp-6], ax
 xor ax, ax
@@ -213,6 +213,102 @@ mov ax, STR_0
 mov dx, ax
 call rt_print_str
 call rt_print_newline
+mov ax, STR_1
+mov dx, ax
+call rt_print_str
+call rt_print_newline
+mov ax, STR_2
+mov dx, ax
+call rt_print_str
+xor ax, ax
+mov [bp-32], ax
+xor ax, ax
+mov [bp-34], ax
+xor ax, ax
+mov [bp-36], ax
+mov ax, 1
+mov [bp-32], ax
+mov ax, 0
+mov [bp-34], ax
+mov ax, [bp-34]
+cmp ax, 0
+je AND_FALSE6
+mov ax, [bp-34]
+cmp ax, 0
+je AND_FALSE6
+mov ax, 1
+jmp AND_END5
+AND_FALSE6:
+xor ax, ax
+AND_END5:
+mov [bp-36], ax
+mov ax, [bp-32]
+cmp ax, 0
+jne OR_TRUE8
+mov ax, [bp-34]
+cmp ax, 0
+jne OR_TRUE8
+xor ax, ax
+jmp OR_END7
+OR_TRUE8:
+mov ax, 1
+OR_END7:
+mov [bp-36], ax
+mov ax, [bp-32]
+cmp ax, 0
+je AND_FALSE12
+mov ax, [bp-34]
+cmp ax, 0
+je T13
+xor ax, ax
+jmp E14
+T13:
+mov ax, 1
+E14:
+cmp ax, 0
+je AND_FALSE12
+mov ax, 1
+jmp AND_END11
+AND_FALSE12:
+xor ax, ax
+AND_END11:
+cmp ax, 0
+je ELSE9
+mov ax, 1
+call rt_print_num16
+call rt_print_newline
+jmp ENDIF10
+ELSE9:
+ENDIF10:
+mov ax, [bp-32]
+cmp ax, 0
+jne OR_TRUE18
+mov ax, [bp-34]
+cmp ax, 0
+je AND_FALSE20
+mov ax, 0
+cmp ax, 0
+je AND_FALSE20
+mov ax, 1
+jmp AND_END19
+AND_FALSE20:
+xor ax, ax
+AND_END19:
+cmp ax, 0
+jne OR_TRUE18
+xor ax, ax
+jmp OR_END17
+OR_TRUE18:
+mov ax, 1
+OR_END17:
+cmp ax, 0
+je ELSE15
+mov ax, 2
+call rt_print_num16
+call rt_print_newline
+jmp ENDIF16
+ELSE15:
+ENDIF16:
 mov ax, 0
 mov sp, bp
 pop bp
@@ -221,4 +317,6 @@ mov sp, bp
 pop bp
 ret
 section .data
-STR_0 db 'Hello','$'
+STR_0 db ' ','$'
+STR_1 db 'Hello','$'
+STR_2 db 'My Name Is Nathan','$'
