@@ -31,6 +31,11 @@ class Call(Expr):
     callee: str
     args: List[Expr]
 
+@dataclass
+class Index(Expr):
+    array: Expr
+    index: Expr
+
 # Statements
 @dataclass
 class Stmt:
@@ -48,7 +53,7 @@ class VarDecl(Stmt):
 
 @dataclass
 class Assign(Stmt):
-    name: str
+    target: Expr  # Identifier or Index
     value: Expr
 
 @dataclass

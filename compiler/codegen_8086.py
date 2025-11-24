@@ -63,10 +63,13 @@ class CodeGen8086:
                 off = self.fn_locals[st.name]
                 self.em.emit(f"mov [bp-{off}], ax")
         elif isinstance(st, A.Assign):
-            self._emit_expr(st.value, ctx)
-            off = self.fn_locals.get(st.name)
-            if off is not None:
-                self.em.emit(f"mov [bp-{off}], ax")
+            # Handle identifier assignment only for now; array element assignment
+            # will be handled via Index in a later pass.
+            if isinstance(st.target, A.Identifier):
+                self._emit_expr(st.value, ctx)
+                off = self.fn_locals.get(st.target.name)
+                if off is not None:
+                    self.em.emit(f"mov [bp-{off}], ax")
         elif isinstance(st, A.If):
             else_lbl = self.em.unique_label("ELSE")
             end_lbl = self.em.unique_label("ENDIF")

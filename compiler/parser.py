@@ -70,15 +70,28 @@ class Parser:
         return A.Function(name_tok.lexeme, params, ret_type, body)
 
     def _type_name(self) -> str:
+        # base scalar types
         if self._match(TokenType.INT):
-            return "int"
-        if self._match(TokenType.STR):
-            return "str"
-        if self._match(TokenType.VOID):
-            return "void"
-        # allow identifiers for user-defined types in future
-        tok = self._consume(TokenType.IDENTIFIER, "Expected type name")
-        return tok.lexeme
+            base = "int"
+        elif self._match(TokenType.STR):
+            base = "str"
+        elif self._match(TokenType.VOID):
+            base = "void"
+        elif self._match(TokenType.PTR):
+            base = "ptr"
+        else:
+            # allow identifiers for user-defined types in future
+            tok = self._consume(TokenType.IDENTIFIER, "Expected type name")
+            base = tok.lexeme
+
+        # Optional fixed-size int array syntax: int[NUMBER]
+        if base == "int" and self._match(TokenType.LEFT_BRACKET):
+            # Expect a numeric literal for the length
+            num_tok = self._consume(TokenType.NUMBER, "Expected array size after '['")
+            self._consume(TokenType.RIGHT_BRACKET, "Expected ']' after array size")
+            return f"int[{int(num_tok.literal)}]"
+
+        return base
 
     def _block(self) -> List[A.Stmt]:
         self._consume(TokenType.LEFT_BRACE, "Expected '{' to start block")
@@ -132,17 +145,12 @@ class Parser:
             self._consume(TokenType.RIGHT_PAREN, "Expected ')' after condition")
             body = self._block()
             return A.While(cond, body)
-        # assignment lookahead
-        if self._check(TokenType.IDENTIFIER):
-            # safe lookahead for '='
-            if self.tokens[self.current + 1].type == TokenType.EQUAL:
-                name = self._advance().lexeme  # consume identifier
-                self._advance()  # consume '='
-                value = self._expression()
-                self._consume(TokenType.SEMICOLON, "Expected ';' after assignment")
-                return A.Assign(name, value)
-        # expression statement
+        # General expression / assignment form: `expr` or `expr = value`.
         expr = self._expression()
+        if self._match(TokenType.EQUAL):
+            value = self._expression()
+            self._consume(TokenType.SEMICOLON, "Expected ';' after assignment")
+            return A.Assign(expr, value)
         self._consume(TokenType.SEMICOLON, "Expected ';' after expression")
         return A.ExprStmt(expr)
 
@@ -194,16 +202,26 @@ class Parser:
 
     def _call(self) -> A.Expr:
         expr = self._primary()
-        # Only support simple direct calls: IDENT '(' args? ')'
-        if isinstance(expr, A.Identifier) and self._match(TokenType.LEFT_PAREN):
-            args: List[A.Expr] = []
-            if not self._check(TokenType.RIGHT_PAREN):
-                while True:
-                    args.append(self._expression())
-                    if not self._match(TokenType.COMMA):
-                        break
-            self._consume(TokenType.RIGHT_PAREN, "Expected ')' after arguments")
-            return A.Call(expr.name, args)
+        # Support chained postfix operators: calls and indexing.
+        while True:
+            # Function call: IDENT '(' args? ')'
+            if isinstance(expr, A.Identifier) and self._match(TokenType.LEFT_PAREN):
+                args: List[A.Expr] = []
+                if not self._check(TokenType.RIGHT_PAREN):
+                    while True:
+                        args.append(self._expression())
+                        if not self._match(TokenType.COMMA):
+                            break
+                self._consume(TokenType.RIGHT_PAREN, "Expected ')' after arguments")
+                expr = A.Call(expr.name, args)
+                continue
+            # Indexing: expr '[' expression ']'
+            if self._match(TokenType.LEFT_BRACKET):
+                index_expr = self._expression()
+                self._consume(TokenType.RIGHT_BRACKET, "Expected ']' after index expression")
+                expr = A.Index(expr, index_expr)
+                continue
+            break
         return expr
 
     def _primary(self) -> A.Expr:

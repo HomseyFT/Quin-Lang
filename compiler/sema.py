@@ -2,7 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 from . import ast as A
-from .types import Type, Int, Str, Void, Bool, type_from_name
+from .types import Type, Int, Str, Void, Bool, Ptr, type_from_name, is_array_type
+from .builtins import get_builtins, BuiltinSig
 
 class SemanticError(Exception):
     pass
@@ -52,7 +53,15 @@ class SemanticAnalyzer:
         self.ctx = Context()
 
     def analyze(self, program: A.Program) -> Context:
-        # First pass: collect function signatures
+        # Register builtin functions first
+        for name, (param_names, ret_name) in get_builtins().items():
+            if name in self.ctx.functions:
+                continue
+            param_types = [type_from_name(tn) for tn in param_names]
+            ret_type = type_from_name(ret_name)
+            self.ctx.functions[name] = FunctionSig(name, param_types, ret_type)
+
+        # First pass: collect user-defined function signatures
         for fn in program.functions:
             param_types = [type_from_name(p.type_name) for p in fn.params]
             ret_type = type_from_name(fn.return_type) if fn.return_type else Void
@@ -93,12 +102,26 @@ class SemanticAnalyzer:
                 raise SemanticError(f"Cannot infer type for '{st.name}' without initializer")
             scope.define(Symbol(st.name, var_type))
         elif isinstance(st, A.Assign):
-            sym = scope.resolve(st.name)
-            if sym is None:
-                raise SemanticError(f"Undeclared variable '{st.name}'")
-            val_t = self._analyze_expr(st.value, scope)
-            if sym.type != val_t:
-                raise SemanticError(f"Cannot assign {val_t} to {sym.type} variable '{st.name}'")
+            # Generalized assignment target
+            if isinstance(st.target, A.Identifier):
+                sym = scope.resolve(st.target.name)
+                if sym is None:
+                    raise SemanticError(f"Undeclared variable '{st.target.name}'")
+                val_t = self._analyze_expr(st.value, scope)
+                if sym.type != val_t:
+                    raise SemanticError(f"Cannot assign {val_t} to {sym.type} variable '{st.target.name}'")
+            elif isinstance(st.target, A.Index):
+                arr_t = self._analyze_expr(st.target.array, scope)
+                if not is_array_type(arr_t):
+                    raise SemanticError("Index target must be an int[N] array")
+                idx_t = self._analyze_expr(st.target.index, scope)
+                if idx_t != Int:
+                    raise SemanticError("Array index must be int")
+                val_t = self._analyze_expr(st.value, scope)
+                if val_t != Int:
+                    raise SemanticError("Array elements must be int")
+            else:
+                raise SemanticError("Invalid assignment target")
         elif isinstance(st, A.Print):
             val_t = self._analyze_expr(st.value, scope)
             if val_t not in (Int, Str):
@@ -169,6 +192,15 @@ class SemanticAnalyzer:
                     return Bool
                 raise SemanticError("Comparison requires operands of same type")
             raise SemanticError(f"Unknown operator {e.op}")
+        if isinstance(e, A.Index):
+            arr_t = self._analyze_expr(e.array, scope)
+            if not is_array_type(arr_t):
+                raise SemanticError("Indexing requires int[N] array")
+            idx_t = self._analyze_expr(e.index, scope)
+            if idx_t != Int:
+                raise SemanticError("Array index must be int")
+            self.ctx.set_type(e, Int)
+            return Int
         if isinstance(e, A.Call):
             if e.callee not in self.ctx.functions:
                 raise SemanticError(f"Call to undeclared function '{e.callee}'")
