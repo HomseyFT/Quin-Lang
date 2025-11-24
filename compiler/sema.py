@@ -202,6 +202,33 @@ class SemanticAnalyzer:
             self.ctx.set_type(e, Int)
             return Int
         if isinstance(e, A.Call):
+            # Special handling for array helpers whose first argument is an array.
+            if e.callee == "array_push":
+                if len(e.args) != 3:
+                    raise SemanticError("array_push expects 3 arguments")
+                arr_t = self._analyze_expr(e.args[0], scope)
+                if not is_array_type(arr_t):
+                    raise SemanticError("array_push first argument must be int[N] array")
+                len_t = self._analyze_expr(e.args[1], scope)
+                if len_t != Int:
+                    raise SemanticError("array_push length must be int")
+                val_t = self._analyze_expr(e.args[2], scope)
+                if val_t != Int:
+                    raise SemanticError("array_push value must be int")
+                self.ctx.set_type(e, Int)
+                return Int
+            if e.callee == "array_pop":
+                if len(e.args) != 2:
+                    raise SemanticError("array_pop expects 2 arguments")
+                arr_t = self._analyze_expr(e.args[0], scope)
+                if not is_array_type(arr_t):
+                    raise SemanticError("array_pop first argument must be int[N] array")
+                len_t = self._analyze_expr(e.args[1], scope)
+                if len_t != Int:
+                    raise SemanticError("array_pop length must be int")
+                # returns popped int
+                self.ctx.set_type(e, Int)
+                return Int
             if e.callee not in self.ctx.functions:
                 raise SemanticError(f"Call to undeclared function '{e.callee}'")
             sig = self.ctx.functions[e.callee]

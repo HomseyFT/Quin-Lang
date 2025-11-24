@@ -204,8 +204,120 @@ class CodeGen8086:
                 self.em.emit("mov ax, 1")
                 self.em.label(e_lbl)
             return
+        if isinstance(e, A.Index):
+            # Currently support indexing into local int[N] arrays only.
+            # e.array must be an Identifier naming a local.
+            if isinstance(e.array, A.Identifier) and e.array.name in self.fn_locals:
+                off = self.fn_locals[e.array.name]
+                # Compute index into SI (index * 2)
+                self._emit_expr(e.index, ctx)   # AX = index
+                self.em.emit("mov si, ax")
+                self.em.emit("shl si, 1")      # 2-byte elements
+                # Access via SS:BP using BP+SI-displacement addressing.
+                # Base local address is [bp-off]; element i is [bp+si-off].
+                self.em.emit(f"mov ax, [bp+si-{off}]")
+                return
+            # Fallback: unknown location, just zero AX
+            self.em.emit("xor ax, ax")
+            return
         if isinstance(e, A.Call):
-            # Zero-arg calls only for now
-            self.em.emit(f"call {e.callee}")
+            # Lower certain builtins inline; fall back to normal calls otherwise.
+            name = e.callee
+            # load16(p: ptr) -> int
+            if name == "load16" and len(e.args) == 1:
+                self._emit_expr(e.args[0], ctx)  # AX = p
+                self.em.emit("mov bx, ax")
+                self.em.emit("mov ax, [bx]")
+                return
+            # store16(p: ptr, value: int) -> void
+            if name == "store16" and len(e.args) == 2:
+                # Evaluate pointer
+                self._emit_expr(e.args[0], ctx)
+                self.em.emit("mov bx, ax")
+                # Evaluate value
+                self._emit_expr(e.args[1], ctx)
+                self.em.emit("mov [bx], ax")
+                # AX is arbitrary for void; leave as value
+                return
+            # memcpy(dst: ptr, src: ptr, count: int) -> void
+            if name == "memcpy" and len(e.args) == 3:
+                # dst -> DI
+                self._emit_expr(e.args[0], ctx)
+                self.em.emit("mov di, ax")
+                # src -> SI
+                self._emit_expr(e.args[1], ctx)
+                self.em.emit("mov si, ax")
+                # count -> CX
+                self._emit_expr(e.args[2], ctx)
+                self.em.emit("mov cx, ax")
+                loop_lbl = self.em.unique_label("MEMCPY_LOOP")
+                end_lbl = self.em.unique_label("MEMCPY_END")
+                self.em.label(loop_lbl)
+                self.em.emit("cmp cx, 0")
+                self.em.emit(f"je {end_lbl}")
+                self.em.emit("mov al, [si]")
+                self.em.emit("mov [di], al")
+                self.em.emit("inc si")
+                self.em.emit("inc di")
+                self.em.emit("dec cx")
+                self.em.emit(f"jmp {loop_lbl}")
+                self.em.label(end_lbl)
+                # AX arbitrary
+                return
+            # memset(dst: ptr, value: int, count: int) -> void
+            if name == "memset" and len(e.args) == 3:
+                # dst -> DI
+                self._emit_expr(e.args[0], ctx)
+                self.em.emit("mov di, ax")
+                # value -> AL (low byte)
+                self._emit_expr(e.args[1], ctx)
+                self.em.emit("mov al, al")  # value already in AX; AL used below
+                # count -> CX
+                self._emit_expr(e.args[2], ctx)
+                self.em.emit("mov cx, ax")
+                loop_lbl = self.em.unique_label("MEMSET_LOOP")
+                end_lbl = self.em.unique_label("MEMSET_END")
+                self.em.label(loop_lbl)
+                self.em.emit("cmp cx, 0")
+                self.em.emit(f"je {end_lbl}")
+                self.em.emit("mov [di], al")
+                self.em.emit("inc di")
+                self.em.emit("dec cx")
+                self.em.emit(f"jmp {loop_lbl}")
+                self.em.label(end_lbl)
+                return
+            # array_push(xs: int[N], len: int, value: int) -> int (new len)
+            if name == "array_push" and len(e.args) == 3:
+                arr_expr, len_expr, val_expr = e.args
+                if isinstance(arr_expr, A.Identifier) and arr_expr.name in self.fn_locals:
+                    off = self.fn_locals[arr_expr.name]
+                    # Evaluate value first and save
+                    self._emit_expr(val_expr, ctx)
+                    self.em.emit("push ax")
+                    # Evaluate len, compute index offset in SI
+                    self._emit_expr(len_expr, ctx)   # AX = len
+                    self.em.emit("mov si, ax")
+                    self.em.emit("shl si, 1")       # index * 2
+                    # Store value at [bp+si-off] using SS:BP addressing
+                    self.em.emit("pop ax")
+                    self.em.emit(f"mov [bp+si-{off}], ax")
+                    # Return len + 1 in AX
+                    self.em.emit("inc ax")
+                    return
+            # array_pop(xs: int[N], len: int) -> int (popped value)
+            if name == "array_pop" and len(e.args) == 2:
+                arr_expr, len_expr = e.args
+                if isinstance(arr_expr, A.Identifier) and arr_expr.name in self.fn_locals:
+                    off = self.fn_locals[arr_expr.name]
+                    # Compute len-1 into AX and use as index
+                    self._emit_expr(len_expr, ctx)  # AX = len
+                    self.em.emit("dec ax")         # len - 1
+                    self.em.emit("mov si, ax")
+                    self.em.emit("shl si, 1")      # index * 2
+                    # Load from [bp+si-off] using SS:BP addressing
+                    self.em.emit(f"mov ax, [bp+si-{off}]")   # return value
+                    return
+            # Fallback: normal function call (no arguments pushed yet)
+            self.em.emit(f"call {name}")
             return
         self.em.emit("xor ax, ax")

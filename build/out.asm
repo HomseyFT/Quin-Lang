@@ -6,21 +6,49 @@ global main
 main:
 push bp
 mov bp, sp
-mov ax, 11
+sub sp, 8
+xor ax, ax
+mov [bp-6], ax
+xor ax, ax
+mov [bp-8], ax
+mov ax, 0
+mov [bp-8], ax
+mov ax, 10
 push ax
-mov ax, 15
-pop bx
-add ax, bx
+mov ax, [bp-8]
+mov si, ax
+shl si, 1
+pop ax
+mov [bp+si-6], ax
+inc ax
+mov [bp-8], ax
+mov ax, 20
+push ax
+mov ax, [bp-8]
+mov si, ax
+shl si, 1
+pop ax
+mov [bp+si-6], ax
+inc ax
+mov [bp-8], ax
+mov ax, 30
+push ax
+mov ax, [bp-8]
+mov si, ax
+shl si, 1
+pop ax
+mov [bp+si-6], ax
+inc ax
+mov [bp-8], ax
+mov ax, 0
+mov si, ax
+shl si, 1
+mov ax, [bp+si-6]
 call rt_print_num16
-mov ax, STR_0
-mov dx, ax
-call rt_print_str
-mov ax, 11
-push ax
-mov ax, 7
-pop bx
-sub bx, ax
-mov ax, bx
+mov ax, 1
+mov si, ax
+shl si, 1
+mov ax, [bp+si-6]
 call rt_print_num16
 mov ax, 0
 mov sp, bp
@@ -30,4 +58,3 @@ mov sp, bp
 pop bp
 ret
 section .data
-STR_0 db 'Hello, this is the first program written in QuinLang!','$'
