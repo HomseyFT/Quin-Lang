@@ -13,31 +13,31 @@ xor ax, ax
 mov [bp-8], ax
 mov ax, 0
 mov [bp-8], ax
+mov ax, [bp-8]
+mov dx, ax
+mov si, ax
+shl si, 1
 mov ax, 10
-push ax
-mov ax, [bp-8]
-mov si, ax
-shl si, 1
-pop ax
 mov [bp+si-6], ax
+mov ax, dx
 inc ax
 mov [bp-8], ax
+mov ax, [bp-8]
+mov dx, ax
+mov si, ax
+shl si, 1
 mov ax, 20
-push ax
-mov ax, [bp-8]
-mov si, ax
-shl si, 1
-pop ax
 mov [bp+si-6], ax
+mov ax, dx
 inc ax
 mov [bp-8], ax
-mov ax, 30
-push ax
 mov ax, [bp-8]
+mov dx, ax
 mov si, ax
 shl si, 1
-pop ax
+mov ax, 30
 mov [bp+si-6], ax
+mov ax, dx
 inc ax
 mov [bp-8], ax
 mov ax, 0
@@ -46,6 +46,11 @@ shl si, 1
 mov ax, [bp+si-6]
 call rt_print_num16
 mov ax, 1
+mov si, ax
+shl si, 1
+mov ax, [bp+si-6]
+call rt_print_num16
+mov ax, 2
 mov si, ax
 shl si, 1
 mov ax, [bp+si-6]

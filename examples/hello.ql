@@ -8,7 +8,8 @@ fn main(): int {
     len = array_push(arr, len, 30);
 
     print(arr[0]);
-    print(arr[1]);  // only two prints
+    print(arr[1]);
+    print(arr[2]);
 
     return 0;
 }

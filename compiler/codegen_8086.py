@@ -291,17 +291,17 @@ class CodeGen8086:
                 arr_expr, len_expr, val_expr = e.args
                 if isinstance(arr_expr, A.Identifier) and arr_expr.name in self.fn_locals:
                     off = self.fn_locals[arr_expr.name]
-                    # Evaluate value first and save
-                    self._emit_expr(val_expr, ctx)
-                    self.em.emit("push ax")
-                    # Evaluate len, compute index offset in SI
-                    self._emit_expr(len_expr, ctx)   # AX = len
+                    # Evaluate current length and compute element address.
+                    # Keep original length in DX so we can return len+1.
+                    self._emit_expr(len_expr, ctx)   # AX = len_old
+                    self.em.emit("mov dx, ax")       # DX = len_old
                     self.em.emit("mov si, ax")
                     self.em.emit("shl si, 1")       # index * 2
-                    # Store value at [bp+si-off] using SS:BP addressing
-                    self.em.emit("pop ax")
+                    # Evaluate value and store into array slot [bp+si-off]
+                    self._emit_expr(val_expr, ctx)   # AX = value
                     self.em.emit(f"mov [bp+si-{off}], ax")
-                    # Return len + 1 in AX
+                    # Return len_old + 1 in AX
+                    self.em.emit("mov ax, dx")
                     self.em.emit("inc ax")
                     return
             # array_pop(xs: int[N], len: int) -> int (popped value)
