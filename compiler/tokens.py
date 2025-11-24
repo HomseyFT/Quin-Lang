@@ -19,6 +19,7 @@ class TokenType(Enum):
     STAR = auto()
     COLON = auto()
     EQUAL = auto()
+    AMP = auto()
 
     # One or two character tokens
     BANG = auto()

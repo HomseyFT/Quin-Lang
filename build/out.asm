@@ -6,7 +6,7 @@ global main
 main:
 push bp
 mov bp, sp
-sub sp, 28
+sub sp, 30
 xor ax, ax
 mov [bp-6], ax
 xor ax, ax
@@ -91,32 +91,102 @@ xor ax, ax
 mov [bp-12], ax
 xor ax, ax
 mov [bp-14], ax
+xor ax, ax
+mov [bp-16], ax
+xor ax, ax
+mov [bp-18], ax
 mov ax, 1234
 mov [bp-12], ax
 mov ax, 0
 mov [bp-14], ax
+lea ax, [bp-12]
+mov [bp-16], ax
+lea ax, [bp-14]
+mov [bp-18], ax
+mov ax, [bp-16]
+mov bx, ax
+mov ax, 4321
+mov [bx], ax
+mov ax, [bp-12]
+call rt_print_num16
+mov ax, [bp-18]
+mov bx, ax
+mov ax, 1111
+mov [bx], ax
+mov ax, [bp-14]
+call rt_print_num16
 xor ax, ax
-mov [bp-20], ax
+mov [bp-24], ax
 xor ax, ax
-mov [bp-26], ax
-xor ax, ax
-mov [bp-28], ax
-mov ax, 0
-mov [bp-28], ax
+mov [bp-30], ax
 mov ax, 0
 mov si, ax
 shl si, 1
-mov ax, [bp+si-20]
+lea ax, [bp+si-30]
+mov di, ax
+mov ax, 0
+mov si, ax
+shl si, 1
+lea ax, [bp+si-24]
+mov si, ax
+mov ax, 6
+mov cx, ax
+MEMCPY_LOOP1:
+cmp cx, 0
+je MEMCPY_END2
+mov al, [si]
+mov [di], al
+inc si
+inc di
+dec cx
+jmp MEMCPY_LOOP1
+MEMCPY_END2:
+mov ax, 0
+mov si, ax
+shl si, 1
+mov ax, [bp+si-30]
 call rt_print_num16
 mov ax, 1
 mov si, ax
 shl si, 1
-mov ax, [bp+si-20]
+mov ax, [bp+si-30]
 call rt_print_num16
 mov ax, 2
 mov si, ax
 shl si, 1
-mov ax, [bp+si-20]
+mov ax, [bp+si-30]
+call rt_print_num16
+mov ax, 0
+mov si, ax
+shl si, 1
+lea ax, [bp+si-30]
+mov di, ax
+mov ax, 0
+mov al, al
+mov ax, 6
+mov cx, ax
+MEMSET_LOOP3:
+cmp cx, 0
+je MEMSET_END4
+mov [di], al
+inc di
+dec cx
+jmp MEMSET_LOOP3
+MEMSET_END4:
+mov ax, 0
+mov si, ax
+shl si, 1
+mov ax, [bp+si-30]
+call rt_print_num16
+mov ax, 1
+mov si, ax
+shl si, 1
+mov ax, [bp+si-30]
+call rt_print_num16
+mov ax, 2
+mov si, ax
+shl si, 1
+mov ax, [bp+si-30]
 call rt_print_num16
 mov ax, 0
 mov sp, bp

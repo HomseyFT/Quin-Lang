@@ -194,6 +194,10 @@ class Parser:
         return expr
 
     def _unary(self) -> A.Expr:
+        # Address-of: &expr (limited to identifiers and indexing at sema/codegen)
+        if self._match(TokenType.AMP):
+            target = self._unary()
+            return A.AddressOf(target)
         if self._match(TokenType.BANG, TokenType.MINUS):
             op = self._previous().lexeme
             right = self._unary()

@@ -115,6 +115,30 @@ class CodeGen8086:
             else:
                 self.em.emit("xor ax, ax")
             return
+        if isinstance(e, A.AddressOf):
+            # Compute pointer value (offset within SS) for locals/array elements.
+            if isinstance(e.target, A.Identifier):
+                off = self.fn_locals.get(e.target.name)
+                if off is not None:
+                    # Address of scalar/array base: bp-off
+                    self.em.emit(f"lea ax, [bp-{off}]")
+                else:
+                    self.em.emit("xor ax, ax")
+                return
+            if isinstance(e.target, A.Index) and isinstance(e.target.array, A.Identifier):
+                arr_name = e.target.array.name
+                if arr_name in self.fn_locals:
+                    off = self.fn_locals[arr_name]
+                    # Compute index into SI (index * 2)
+                    self._emit_expr(e.target.index, ctx)  # AX = index
+                    self.em.emit("mov si, ax")
+                    self.em.emit("shl si, 1")           # 2-byte elements
+                    # Effective address = bp+si-off
+                    self.em.emit(f"lea ax, [bp+si-{off}]")
+                    return
+            # Fallback: null pointer
+            self.em.emit("xor ax, ax")
+            return
         if isinstance(e, A.Unary):
             self._emit_expr(e.right, ctx)
             if e.op == '-':

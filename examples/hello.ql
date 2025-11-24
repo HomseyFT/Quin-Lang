@@ -23,34 +23,42 @@ fn main(): int {
     // Pointer + memory intrinsic tests using stack-allocated ints
     let a: int;
     let b: int;
+    let pa: ptr;
+    let pb: ptr;
     a = 1234;
     b = 0;
 
-    // store16 & load16: treat addresses of a and b as ptr via builtin helpers
-    // NOTE: in this minimal design we don't have explicit & operator yet,
-    // so for now we'll just verify memcpy/memset on arrays below.
+    pa = &a;
+    pb = &b;
 
+    // store16 & load16
+    store16(pa, 4321);
+    print(a);          // expect 4321
+
+    store16(pb, 1111);
+    print(b);          // expect 1111
+
+    // memcpy/memset tests with int[3] buffers
     let buf1: int[3];
     let buf2: int[3];
-    let i: int;
 
-    i = 0;
     buf1[0] = 7;
     buf1[1] = 8;
     buf1[2] = 9;
 
-    // Copy buf1 -> buf2 using memcpy (operating on bytes)
-    // Each int is 2 bytes, so copy 3 * 2 = 6 bytes.
-    // We'll use the fact that array variables are stack locals and our
-    // backend lowers them to contiguous memory.
+    // memcpy(buf2, buf1, 6)  ; 3 ints * 2 bytes each
+    memcpy(&buf2[0], &buf1[0], 6);
 
-    // For now, just print buf1 to confirm contents and rely on future
-    // language support for taking addresses (&buf1[0]) to fully exercise
-    // memcpy/memset.
+    print(buf2[0]);    // 7
+    print(buf2[1]);    // 8
+    print(buf2[2]);    // 9
 
-    print(buf1[0]);
-    print(buf1[1]);
-    print(buf1[2]);
+    // memset(buf2, 0, 6)
+    memset(&buf2[0], 0, 6);
+
+    print(buf2[0]);    // 0
+    print(buf2[1]);    // 0
+    print(buf2[2]);    // 0
 
     return 0;
 }

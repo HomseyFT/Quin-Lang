@@ -201,6 +201,26 @@ class SemanticAnalyzer:
                 raise SemanticError("Array index must be int")
             self.ctx.set_type(e, Int)
             return Int
+        if isinstance(e, A.AddressOf):
+            # For now, allow taking the address of local variables and array elements only.
+            if isinstance(e.target, A.Identifier):
+                sym = scope.resolve(e.target.name)
+                if sym is None:
+                    raise SemanticError(f"Undeclared variable '{e.target.name}'")
+                # Any object with a stack slot can have its address taken; treat as ptr.
+                self.ctx.set_type(e, Ptr)
+                return Ptr
+            if isinstance(e.target, A.Index):
+                # Address of array element; also ptr.
+                arr_t = self._analyze_expr(e.target.array, scope)
+                if not is_array_type(arr_t):
+                    raise SemanticError("Can only take address of int[N] array elements")
+                idx_t = self._analyze_expr(e.target.index, scope)
+                if idx_t != Int:
+                    raise SemanticError("Array index must be int")
+                self.ctx.set_type(e, Ptr)
+                return Ptr
+            raise SemanticError("Can only take address of variables or array elements")
         if isinstance(e, A.Call):
             # Special handling for array helpers whose first argument is an array.
             if e.callee == "array_push":

@@ -36,6 +36,10 @@ class Index(Expr):
     array: Expr
     index: Expr
 
+@dataclass
+class AddressOf(Expr):
+    target: Expr  # Identifier or Index
+
 # Statements
 @dataclass
 class Stmt:

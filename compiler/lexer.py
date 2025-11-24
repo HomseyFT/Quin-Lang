@@ -84,6 +84,8 @@ class Lexer:
             self._add_token(TokenType.STAR); return
         if c == ':':
             self._add_token(TokenType.COLON); return
+        if c == '&':
+            self._add_token(TokenType.AMP); return
         if c == '/':
             if self._match('/'):
                 # comment until end of line
