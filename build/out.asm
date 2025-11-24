@@ -119,6 +119,27 @@ xor ax, ax
 mov [bp-24], ax
 xor ax, ax
 mov [bp-30], ax
+mov ax, 7
+push ax
+mov ax, 0
+mov si, ax
+shl si, 1
+pop ax
+mov [bp+si-24], ax
+mov ax, 8
+push ax
+mov ax, 1
+mov si, ax
+shl si, 1
+pop ax
+mov [bp+si-24], ax
+mov ax, 9
+push ax
+mov ax, 2
+mov si, ax
+shl si, 1
+pop ax
+mov [bp+si-24], ax
 mov ax, 0
 mov si, ax
 shl si, 1
@@ -162,13 +183,13 @@ shl si, 1
 lea ax, [bp+si-30]
 mov di, ax
 mov ax, 0
-mov al, al
+mov dl, al
 mov ax, 6
 mov cx, ax
 MEMSET_LOOP3:
 cmp cx, 0
 je MEMSET_END4
-mov [di], al
+mov [di], dl
 inc di
 dec cx
 jmp MEMSET_LOOP3

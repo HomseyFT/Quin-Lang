@@ -63,13 +63,26 @@ class CodeGen8086:
                 off = self.fn_locals[st.name]
                 self.em.emit(f"mov [bp-{off}], ax")
         elif isinstance(st, A.Assign):
-            # Handle identifier assignment only for now; array element assignment
-            # will be handled via Index in a later pass.
+            # Handle identifier assignments and array element assignments.
             if isinstance(st.target, A.Identifier):
                 self._emit_expr(st.value, ctx)
                 off = self.fn_locals.get(st.target.name)
                 if off is not None:
                     self.em.emit(f"mov [bp-{off}], ax")
+            elif isinstance(st.target, A.Index) and isinstance(st.target.array, A.Identifier):
+                arr_name = st.target.array.name
+                off = self.fn_locals.get(arr_name)
+                if off is not None:
+                    # Evaluate value and keep it on stack
+                    self._emit_expr(st.value, ctx)   # AX = value
+                    self.em.emit("push ax")
+                    # Compute index offset
+                    self._emit_expr(st.target.index, ctx)  # AX = index
+                    self.em.emit("mov si, ax")
+                    self.em.emit("shl si, 1")          # index * 2
+                    # Store value at [bp+si-off]
+                    self.em.emit("pop ax")
+                    self.em.emit(f"mov [bp+si-{off}], ax")
         elif isinstance(st, A.If):
             else_lbl = self.em.unique_label("ELSE")
             end_lbl = self.em.unique_label("ENDIF")
@@ -293,9 +306,9 @@ class CodeGen8086:
                 # dst -> DI
                 self._emit_expr(e.args[0], ctx)
                 self.em.emit("mov di, ax")
-                # value -> AL (low byte)
+                # value -> DL (preserve across count evaluation)
                 self._emit_expr(e.args[1], ctx)
-                self.em.emit("mov al, al")  # value already in AX; AL used below
+                self.em.emit("mov dl, al")  # take low byte of value
                 # count -> CX
                 self._emit_expr(e.args[2], ctx)
                 self.em.emit("mov cx, ax")
@@ -304,7 +317,7 @@ class CodeGen8086:
                 self.em.label(loop_lbl)
                 self.em.emit("cmp cx, 0")
                 self.em.emit(f"je {end_lbl}")
-                self.em.emit("mov [di], al")
+                self.em.emit("mov [di], dl")
                 self.em.emit("inc di")
                 self.em.emit("dec cx")
                 self.em.emit(f"jmp {loop_lbl}")
