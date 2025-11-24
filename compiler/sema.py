@@ -122,10 +122,10 @@ class SemanticAnalyzer:
                     raise SemanticError("Array elements must be int")
             else:
                 raise SemanticError("Invalid assignment target")
-        elif isinstance(st, A.Print):
+        elif isinstance(st, A.Print) or isinstance(st, A.PrintLn):
             val_t = self._analyze_expr(st.value, scope)
             if val_t not in (Int, Str):
-                raise SemanticError("print expects int or str")
+                raise SemanticError("print/println expect int or str")
         elif isinstance(st, A.Return):
             # We can't access function return type easily here without passing it; for simplicity, allow any
             if st.value is not None:

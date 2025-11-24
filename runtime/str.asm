@@ -20,6 +20,21 @@ rt_print_str:
     pop ax
     ret
 
+; Print DOS CRLF ("\r\n") newline
+global rt_print_newline
+rt_print_newline:
+    push ax
+    push dx
+    mov dl, 0x0D      ; '\r'
+    mov ah, 0x02
+    int 0x21
+    mov dl, 0x0A      ; '\n'
+    mov ah, 0x02
+    int 0x21
+    pop dx
+    pop ax
+    ret
+
 ; Compare strings byte by byte until '$' or difference
 ; Uses AL, BL as current chars
 

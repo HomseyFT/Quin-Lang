@@ -209,6 +209,10 @@ mov si, ax
 shl si, 1
 mov ax, [bp+si-30]
 call rt_print_num16
+mov ax, STR_0
+mov dx, ax
+call rt_print_str
+call rt_print_newline
 mov ax, 0
 mov sp, bp
 pop bp
@@ -217,3 +221,4 @@ mov sp, bp
 pop bp
 ret
 section .data
+STR_0 db 'Hello','$'

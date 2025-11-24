@@ -124,6 +124,12 @@ class Parser:
             self._consume(TokenType.RIGHT_PAREN, "Expected ')' after print expression")
             self._consume(TokenType.SEMICOLON, "Expected ';' after print statement")
             return A.Print(expr)
+        if self._match(TokenType.PRINTLN):
+            self._consume(TokenType.LEFT_PAREN, "Expected '(' after 'println'")
+            expr = self._expression()
+            self._consume(TokenType.RIGHT_PAREN, "Expected ')' after println expression")
+            self._consume(TokenType.SEMICOLON, "Expected ';' after println statement")
+            return A.PrintLn(expr)
         if self._match(TokenType.RETURN):
             value: Optional[A.Expr] = None
             if not self._check(TokenType.SEMICOLON):

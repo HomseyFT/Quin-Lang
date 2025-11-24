@@ -49,6 +49,7 @@ class TokenType(Enum):
     VOID = auto()
     PTR = auto()
     PRINT = auto()
+    PRINTLN = auto()
 
     EOF = auto()
 
@@ -65,6 +66,7 @@ KEYWORDS = {
     "str": TokenType.STR,
     "void": TokenType.VOID,
     "print": TokenType.PRINT,
+    "println": TokenType.PRINTLN,
     "ptr": TokenType.PTR,
 }
 

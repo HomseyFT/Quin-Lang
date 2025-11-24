@@ -59,6 +59,7 @@ fn main(): int {
     print(buf2[0]);    // 0
     print(buf2[1]);    // 0
     print(buf2[2]);    // 0
+    println("Hello");
 
     return 0;
 }

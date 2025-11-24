@@ -65,6 +65,10 @@ class Print(Stmt):
     value: Expr
 
 @dataclass
+class PrintLn(Stmt):
+    value: Expr
+
+@dataclass
 class Return(Stmt):
     value: Optional[Expr]
 

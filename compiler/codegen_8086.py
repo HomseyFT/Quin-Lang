@@ -47,6 +47,16 @@ class CodeGen8086:
                 self.em.emit("call rt_print_str")
             else:
                 self.em.emit("call rt_print_num16")
+        elif isinstance(st, A.PrintLn):
+            self._emit_expr(st.value, ctx)
+            t = ctx.get_type(st.value)
+            if t == Str:
+                self.em.emit("mov dx, ax")
+                self.em.emit("call rt_print_str")
+            else:
+                self.em.emit("call rt_print_num16")
+            # newline after value
+            self.em.emit("call rt_print_newline")
         elif isinstance(st, A.Return):
             if st.value:
                 self._emit_expr(st.value, ctx)
