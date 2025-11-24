@@ -8,6 +8,8 @@ class TokenType(Enum):
     RIGHT_PAREN = auto()
     LEFT_BRACE = auto()
     RIGHT_BRACE = auto()
+    LEFT_BRACKET = auto()
+    RIGHT_BRACKET = auto()
     COMMA = auto()
     DOT = auto()
     MINUS = auto()
@@ -44,6 +46,7 @@ class TokenType(Enum):
     INT = auto()
     STR = auto()
     VOID = auto()
+    PTR = auto()
     PRINT = auto()
 
     EOF = auto()
@@ -61,6 +64,7 @@ KEYWORDS = {
     "str": TokenType.STR,
     "void": TokenType.VOID,
     "print": TokenType.PRINT,
+    "ptr": TokenType.PTR,
 }
 
 @dataclass

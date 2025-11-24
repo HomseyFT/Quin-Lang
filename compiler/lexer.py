@@ -66,6 +66,10 @@ class Lexer:
             self._add_token(TokenType.LEFT_BRACE); return
         if c == '}':
             self._add_token(TokenType.RIGHT_BRACE); return
+        if c == '[':
+            self._add_token(TokenType.LEFT_BRACKET); return
+        if c == ']':
+            self._add_token(TokenType.RIGHT_BRACKET); return
         if c == ',':
             self._add_token(TokenType.COMMA); return
         if c == '.':
@@ -121,6 +125,24 @@ class Lexer:
         self._add_token(TokenType.STRING, value)
 
     def _number(self):
+        # Support hexadecimal literals of the form 0xNNNN or 0XNNNN
+        if self.source[self.start] == '0' and self._peek() in ('x', 'X'):
+            # consume 'x' or 'X'
+            self._advance()
+            while True:
+                ch = self._peek()
+                if ch.isdigit() or ('a' <= ch.lower() <= 'f'):
+                    self._advance()
+                else:
+                    break
+            text = self.source[self.start:self.current]
+            # strip 0x/0X prefix
+            value_text = text[2:] if len(text) > 2 else "0"
+            value = int(value_text, 16) if value_text else 0
+            self._add_token(TokenType.NUMBER, value)
+            return
+
+        # Decimal integer literal (existing behavior)
         while self._peek().isdigit():
             self._advance()
         if self._peek() == '.' and self._peek_next().isdigit():
