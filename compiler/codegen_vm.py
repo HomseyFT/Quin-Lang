@@ -13,6 +13,7 @@ class FunctionLayout:
     num_locals: int
     local_index: Dict[str, int]
     entry_pc: int
+    arrays: Dict[str, int]   # name -> length (for int[N] arrays)
 
 
 class CodeGenVM:
@@ -36,20 +37,36 @@ class CodeGenVM:
             self.functions.append(layout)
             self._emit_function(fn, layout, ctx)
         # Convert FunctionLayout to runtime FunctionInfo in driver
-        from ..runtime.vm import FunctionInfo
+        from runtime.vm import FunctionInfo
         fns = [FunctionInfo(fl.name, fl.entry_pc, fl.num_locals) for fl in self.functions]
         return self.code, fns, self.strings
 
     def _build_layout(self, fn: A.Function) -> FunctionLayout:
         local_index: Dict[str, int] = {}
+        arrays: Dict[str, int] = {}
         next_idx = 0
 
         def visit_stmt(st: A.Stmt):
             nonlocal next_idx
             if isinstance(st, A.VarDecl):
                 if st.name not in local_index:
-                    local_index[st.name] = next_idx
-                    next_idx += 1
+                    # Determine if this is an int[N] array by its type_name string
+                    n = None
+                    if st.type_name and isinstance(st.type_name, str) and st.type_name.startswith("int[") and st.type_name.endswith("]"):
+                        inner = st.type_name[4:-1]
+                        try:
+                            n = int(inner)
+                        except ValueError:
+                            n = None
+                    if n is not None and n > 0:
+                        # Flatten array into n consecutive locals
+                        base = next_idx
+                        local_index[st.name] = base
+                        arrays[st.name] = n
+                        next_idx += n
+                    else:
+                        local_index[st.name] = next_idx
+                        next_idx += 1
             elif isinstance(st, A.If):
                 for s in st.then_block:
                     visit_stmt(s)
@@ -63,7 +80,7 @@ class CodeGenVM:
         for st in fn.body:
             visit_stmt(st)
 
-        return FunctionLayout(fn.name, next_idx, local_index, entry_pc=0)
+        return FunctionLayout(fn.name, next_idx, local_index, entry_pc=0, arrays=arrays)
 
     def _emit_function(self, fn: A.Function, layout: FunctionLayout, ctx: Context):
         for st in fn.body:
@@ -76,20 +93,34 @@ class CodeGenVM:
 
     def _emit_stmt(self, st: A.Stmt, layout: FunctionLayout, ctx: Context):
         if isinstance(st, A.VarDecl):
-            # Initialize local to 0 or initializer
+            # Initialize scalar or array locals
             idx = layout.local_index[st.name]
-            if st.init is not None:
-                self._emit_expr(st.init, layout, ctx)
+            if st.name in layout.arrays:
+                length = layout.arrays[st.name]
+                # For now, ignore any initializer for arrays and zero all elements
+                for offset in range(length):
+                    self.code.append(Instruction(OpCode.PUSH_INT, 0))
+                    self.code.append(Instruction(OpCode.STORE_LOCAL, idx + offset))
             else:
-                self.code.append(Instruction(OpCode.PUSH_INT, 0))
-            self.code.append(Instruction(OpCode.STORE_LOCAL, idx))
+                if st.init is not None:
+                    self._emit_expr(st.init, layout, ctx)
+                else:
+                    self.code.append(Instruction(OpCode.PUSH_INT, 0))
+                self.code.append(Instruction(OpCode.STORE_LOCAL, idx))
         elif isinstance(st, A.Assign):
             if isinstance(st.target, A.Identifier):
                 idx = layout.local_index.get(st.target.name)
                 if idx is not None:
                     self._emit_expr(st.value, layout, ctx)
                     self.code.append(Instruction(OpCode.STORE_LOCAL, idx))
-            # Index targets and others not handled in this minimal VM yet
+            elif isinstance(st.target, A.Index) and isinstance(st.target.array, A.Identifier):
+                arr_name = st.target.array.name
+                if arr_name in layout.arrays:
+                    base = layout.local_index[arr_name]
+                    # Evaluate value then index, then store into base+index
+                    self._emit_expr(st.value, layout, ctx)    # push value
+                    self._emit_expr(st.target.index, layout, ctx)  # push index
+                    self.code.append(Instruction(OpCode.STORE_LOCAL_IDX, base))
         elif isinstance(st, A.Print):
             self._emit_expr(st.value, layout, ctx)
             t = ctx.get_type(st.value)
@@ -171,9 +202,7 @@ class CodeGenVM:
         elif isinstance(e, A.Unary):
             self._emit_expr(e.right, layout, ctx)
             if e.op == '-':
-                # negate via 0 - x
-                self.code.append(Instruction(OpCode.PUSH_INT, 0))
-                self.code.append(Instruction(OpCode.SWAP))  # not yet defined; future work
+                self.code.append(Instruction(OpCode.NEG))
             elif e.op == '!':
                 self.code.append(Instruction(OpCode.NOT))
         elif isinstance(e, A.Binary):
@@ -200,6 +229,15 @@ class CodeGenVM:
             elif e.op == '>=':
                 self.code.append(Instruction(OpCode.CMP_GE))
             # logical &&/|| short-circuit could be added here later
+        elif isinstance(e, A.Index):
+            # For now, support indexing into local int[N] arrays only.
+            if isinstance(e.array, A.Identifier) and e.array.name in layout.arrays:
+                base = layout.local_index[e.array.name]
+                self._emit_expr(e.index, layout, ctx)  # push index
+                self.code.append(Instruction(OpCode.LOAD_LOCAL_IDX, base))
+            else:
+                # Unknown index target; push 0
+                self.code.append(Instruction(OpCode.PUSH_INT, 0))
         elif isinstance(e, A.Call):
             # For now, treat calls as non-existent in VM subset
             # In future, map function names to indices and emit CALL + RET handling

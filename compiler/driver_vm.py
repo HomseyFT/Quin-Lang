@@ -4,7 +4,7 @@ from .lexer import Lexer
 from .parser import Parser, ParseError
 from .sema import SemanticAnalyzer, SemanticError
 from .codegen_vm import CodeGenVM
-from ..runtime.vm import QuinVM
+from runtime.vm import QuinVM
 import sys
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Dict, Tuple
-from ..compiler.bytecode import OpCode, Instruction, Bytecode
+from compiler.bytecode import OpCode, Instruction, Bytecode
 
 
 @dataclass
@@ -71,6 +71,10 @@ class QuinVM:
                 # signed division
                 self.stack.append(int(a) // int(b))
 
+            elif op is OpCode.NEG:
+                a = self.stack.pop()
+                self.stack.append((-int(a)) & 0xFFFF)
+
             elif op in (OpCode.CMP_EQ, OpCode.CMP_NE, OpCode.CMP_LT, OpCode.CMP_LE, OpCode.CMP_GT, OpCode.CMP_GE):
                 b = self.stack.pop(); a = self.stack.pop()
                 if op is OpCode.CMP_EQ:
@@ -127,9 +131,12 @@ class QuinVM:
                 self.stack.append(self.locals[base + idx])
 
             elif op is OpCode.STORE_LOCAL_IDX:
-                val = self.stack.pop()
+                # Stack order from codegen: [ ..., value, index ]
                 idx = self.stack.pop()
+                val = self.stack.pop()
                 base = int(arg)
+                if base + idx < 0 or base + idx >= len(self.locals):
+                    raise RuntimeError(f"STORE_LOCAL_IDX out of range: base={base}, idx={idx}, num_locals={len(self.locals)}")
                 self.locals[base + idx] = val
 
             elif op is OpCode.PRINT_INT:

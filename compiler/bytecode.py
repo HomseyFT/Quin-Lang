@@ -15,6 +15,7 @@ class OpCode(Enum):
     SUB = auto()
     MUL = auto()
     DIV = auto()
+    NEG = auto()
 
     # Comparisons (push 0/1)
     CMP_EQ = auto()
