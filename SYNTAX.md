@@ -150,7 +150,20 @@ x < y
 x <= y
 x > y
 x >= y
+
+// Logical (short-circuit)
+a && b
+a || b
 ```
+
+Operator precedence (highest to lowest):
+
+- `!`
+- `*`, `/`
+- `+`, `-`
+- comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`)
+- `&&`
+- `||`
 
 ### Arrays and indexing
 
