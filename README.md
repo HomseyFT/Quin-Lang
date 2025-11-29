@@ -1,6 +1,6 @@
 # QuinLang (QL)
 
-QuinLang is a tiny, C-style toy language and compiler that I built to learn about parsing, type checking, and code generation from the ground up.
+QuinLang is a tiny, C-style language and compiler that I built to learn about parsing, type checking, and code generation from the ground up.
 
 The project now has **two backends**:
 
