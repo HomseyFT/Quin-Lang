@@ -3,7 +3,10 @@ from .tokens import Token, TokenType
 from . import ast as A
 
 class ParseError(Exception):
-    pass
+    def __init__(self, message: str, line: int, col: int):
+        super().__init__(message)
+        self.line = line
+        self.col = col
 
 class Parser:
     def __init__(self, tokens: List[Token]):
@@ -27,7 +30,8 @@ class Parser:
     def _consume(self, type_: TokenType, msg: str) -> Token:
         if self._check(type_):
             return self._advance()
-        raise ParseError(msg)
+        tok = self._peek()
+        raise ParseError(f"{msg} (found '{tok.lexeme}')", tok.line, tok.col)
 
     def _check(self, type_: TokenType) -> bool:
         if self._is_at_end():
@@ -265,4 +269,5 @@ class Parser:
             expr = self._expression()
             self._consume(TokenType.RIGHT_PAREN, "Expected ')' after expression")
             return expr
-        raise ParseError("Expected expression")
+        tok = self._peek()
+        raise ParseError("Expected expression", tok.line, tok.col)

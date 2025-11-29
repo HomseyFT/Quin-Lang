@@ -1,0 +1,157 @@
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import List, Dict, Tuple
+from ..compiler.bytecode import OpCode, Instruction, Bytecode
+
+
+@dataclass
+class FunctionInfo:
+    name: str
+    entry_pc: int
+    num_locals: int
+
+
+class QuinVM:
+    def __init__(self, code: Bytecode, functions: List[FunctionInfo], strings: Dict[int, str]):
+        self.code = code
+        self.functions = functions
+        # map name -> index for convenience
+        self.func_index: Dict[str, int] = {f.name: i for i, f in enumerate(functions)}
+        self.strings = strings
+
+        self.stack: List[int] = []              # value stack
+        self.call_stack: List[Tuple[int, List[int]]] = []  # (return_pc, locals)
+        self.pc: int = 0
+        self.locals: List[int] = []             # current frame locals
+
+    def run_main(self) -> int:
+        if "main" not in self.func_index:
+            raise RuntimeError("No 'main' function defined")
+        fn_id = self.func_index["main"]
+        fn = self.functions[fn_id]
+        # set up initial frame
+        self.locals = [0] * fn.num_locals
+        self.pc = fn.entry_pc
+        return self._run()
+
+    def _run(self) -> int:
+        code = self.code
+        while self.pc < len(code):
+            instr = code[self.pc]
+            op = instr.op
+            arg = instr.arg
+            self.pc += 1
+
+            if op is OpCode.PUSH_INT:
+                self.stack.append(int(arg))
+
+            elif op is OpCode.LOAD_LOCAL:
+                self.stack.append(self.locals[arg])
+
+            elif op is OpCode.STORE_LOCAL:
+                val = self.stack.pop()
+                self.locals[arg] = val
+
+            elif op is OpCode.ADD:
+                b = self.stack.pop(); a = self.stack.pop()
+                self.stack.append((a + b) & 0xFFFF)
+
+            elif op is OpCode.SUB:
+                b = self.stack.pop(); a = self.stack.pop()
+                self.stack.append((a - b) & 0xFFFF)
+
+            elif op is OpCode.MUL:
+                b = self.stack.pop(); a = self.stack.pop()
+                self.stack.append((a * b) & 0xFFFF)
+
+            elif op is OpCode.DIV:
+                b = self.stack.pop(); a = self.stack.pop()
+                if b == 0:
+                    raise RuntimeError("Division by zero")
+                # signed division
+                self.stack.append(int(a) // int(b))
+
+            elif op in (OpCode.CMP_EQ, OpCode.CMP_NE, OpCode.CMP_LT, OpCode.CMP_LE, OpCode.CMP_GT, OpCode.CMP_GE):
+                b = self.stack.pop(); a = self.stack.pop()
+                if op is OpCode.CMP_EQ:
+                    res = int(a == b)
+                elif op is OpCode.CMP_NE:
+                    res = int(a != b)
+                elif op is OpCode.CMP_LT:
+                    res = int(a < b)
+                elif op is OpCode.CMP_LE:
+                    res = int(a <= b)
+                elif op is OpCode.CMP_GT:
+                    res = int(a > b)
+                else:  # CMP_GE
+                    res = int(a >= b)
+                self.stack.append(res)
+
+            elif op is OpCode.NOT:
+                a = self.stack.pop()
+                self.stack.append(0 if a else 1)
+
+            elif op is OpCode.JMP:
+                self.pc = int(arg)
+
+            elif op is OpCode.JZ:
+                v = self.stack.pop()
+                if v == 0:
+                    self.pc = int(arg)
+
+            elif op is OpCode.JNZ:
+                v = self.stack.pop()
+                if v != 0:
+                    self.pc = int(arg)
+
+            elif op is OpCode.CALL:
+                fn_id = int(arg)
+                fn = self.functions[fn_id]
+                # push current frame
+                self.call_stack.append((self.pc, self.locals))
+                # set up callee frame
+                self.locals = [0] * fn.num_locals
+                self.pc = fn.entry_pc
+
+            elif op is OpCode.RET:
+                if not self.call_stack:
+                    # return from main; if a value is on stack, use it as exit code
+                    return self.stack.pop() if self.stack else 0
+                ret_pc, prev_locals = self.call_stack.pop()
+                self.pc = ret_pc
+                self.locals = prev_locals
+
+            elif op is OpCode.LOAD_LOCAL_IDX:
+                idx = self.stack.pop()
+                base = int(arg)
+                self.stack.append(self.locals[base + idx])
+
+            elif op is OpCode.STORE_LOCAL_IDX:
+                val = self.stack.pop()
+                idx = self.stack.pop()
+                base = int(arg)
+                self.locals[base + idx] = val
+
+            elif op is OpCode.PRINT_INT:
+                v = self.stack.pop()
+                print(int(v), end="")
+
+            elif op is OpCode.PRINT_STR:
+                sid = self.stack.pop()
+                s = self.strings.get(sid, "")
+                print(s, end="")
+
+            elif op is OpCode.PRINTLN_INT:
+                v = self.stack.pop()
+                print(int(v))
+
+            elif op is OpCode.PRINTLN_STR:
+                sid = self.stack.pop()
+                s = self.strings.get(sid, "")
+                print(s)
+
+            else:
+                raise RuntimeError(f"Unknown opcode {op}")
+
+        # fell off the end
+        return 0
