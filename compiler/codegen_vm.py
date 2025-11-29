@@ -14,6 +14,7 @@ class FunctionLayout:
     local_index: Dict[str, int]
     entry_pc: int
     arrays: Dict[str, int]   # name -> length (for int[N] arrays)
+    num_params: int
 
 
 class CodeGenVM:
@@ -22,6 +23,8 @@ class CodeGenVM:
         self.functions: List[FunctionLayout] = []
         self.strings: Dict[int, str] = {}
         self._string_counter = 0
+        # map function name -> index used in CALL opcode
+        self.func_name_to_index: Dict[str, int] = {}
 
     def _add_string(self, value: str) -> int:
         sid = self._string_counter
@@ -30,21 +33,28 @@ class CodeGenVM:
         return sid
 
     def generate(self, program: A.Program, ctx: Context):
-        # For now, simple layout: each function gets its own locals from VarDecls
+        # For now, simple layout: each function gets its own locals from params + VarDecls
         for fn in program.functions:
             layout = self._build_layout(fn)
             layout.entry_pc = len(self.code)
+            fn_index = len(self.functions)
             self.functions.append(layout)
+            self.func_name_to_index[fn.name] = fn_index
             self._emit_function(fn, layout, ctx)
         # Convert FunctionLayout to runtime FunctionInfo in driver
         from runtime.vm import FunctionInfo
-        fns = [FunctionInfo(fl.name, fl.entry_pc, fl.num_locals) for fl in self.functions]
+        fns = [FunctionInfo(fl.name, fl.entry_pc, fl.num_locals, fl.num_params) for fl in self.functions]
         return self.code, fns, self.strings
 
     def _build_layout(self, fn: A.Function) -> FunctionLayout:
         local_index: Dict[str, int] = {}
         arrays: Dict[str, int] = {}
+        # First, assign parameter locals at indices 0..num_params-1
         next_idx = 0
+        for p in fn.params:
+            if p.name not in local_index:
+                local_index[p.name] = next_idx
+                next_idx += 1
 
         def visit_stmt(st: A.Stmt):
             nonlocal next_idx
@@ -80,7 +90,7 @@ class CodeGenVM:
         for st in fn.body:
             visit_stmt(st)
 
-        return FunctionLayout(fn.name, next_idx, local_index, entry_pc=0, arrays=arrays)
+        return FunctionLayout(fn.name, next_idx, local_index, entry_pc=0, arrays=arrays, num_params=len(fn.params))
 
     def _emit_function(self, fn: A.Function, layout: FunctionLayout, ctx: Context):
         for st in fn.body:
@@ -226,6 +236,52 @@ class CodeGenVM:
             elif e.op == '!':
                 self.code.append(Instruction(OpCode.NOT))
         elif isinstance(e, A.Binary):
+            # Logical && and || with short-circuiting
+            if e.op == '&&':
+                # Evaluate left; if false, skip right and yield 0; else evaluate right and yield 0/1.
+                self._emit_expr(e.left, layout, ctx)
+                jz_index = len(self.code)
+                self.code.append(Instruction(OpCode.JZ, 0))  # if left == 0 -> jump to false
+                # left was true, now evaluate right
+                self._emit_expr(e.right, layout, ctx)
+                jz2_index = len(self.code)
+                self.code.append(Instruction(OpCode.JZ, 0))  # if right == 0 -> jump to false
+                # both true -> push 1 and jump to end
+                self.code.append(Instruction(OpCode.PUSH_INT, 1))
+                jmp_end_index = len(self.code)
+                self.code.append(Instruction(OpCode.JMP, 0))
+                # false label: push 0
+                false_pc = len(self.code)
+                self.code.append(Instruction(OpCode.PUSH_INT, 0))
+                end_pc = len(self.code)
+                # patch jumps
+                self.code[jz_index].arg = false_pc
+                self.code[jz2_index].arg = false_pc
+                self.code[jmp_end_index].arg = end_pc
+                return
+            if e.op == '||':
+                # Evaluate left; if true, skip right and yield 1; else evaluate right and yield 0/1.
+                self._emit_expr(e.left, layout, ctx)
+                jnz_index = len(self.code)
+                self.code.append(Instruction(OpCode.JNZ, 0))  # if left != 0 -> jump to true
+                # left was false, now evaluate right
+                self._emit_expr(e.right, layout, ctx)
+                jnz2_index = len(self.code)
+                self.code.append(Instruction(OpCode.JNZ, 0))  # if right != 0 -> jump to true
+                # both false -> push 0 and jump to end
+                self.code.append(Instruction(OpCode.PUSH_INT, 0))
+                jmp_end_index = len(self.code)
+                self.code.append(Instruction(OpCode.JMP, 0))
+                # true label: push 1
+                true_pc = len(self.code)
+                self.code.append(Instruction(OpCode.PUSH_INT, 1))
+                end_pc = len(self.code)
+                # patch jumps
+                self.code[jnz_index].arg = true_pc
+                self.code[jnz2_index].arg = true_pc
+                self.code[jmp_end_index].arg = end_pc
+                return
+            # All other binary operators are simple, non-short-circuiting
             self._emit_expr(e.left, layout, ctx)
             self._emit_expr(e.right, layout, ctx)
             if e.op == '+':
@@ -327,5 +383,13 @@ class CodeGenVM:
                 self.code.append(Instruction(OpCode.MEMSET_LOCALS))
                 self.code.append(Instruction(OpCode.PUSH_INT, 0))
             else:
-                # For now, treat other calls as returning 0 in VM subset
-                self.code.append(Instruction(OpCode.PUSH_INT, 0))
+                # Regular user-defined function call: evaluate args then CALL by function index.
+                if name not in self.func_name_to_index:
+                    # Unknown function at codegen time; treat as returning 0.
+                    self.code.append(Instruction(OpCode.PUSH_INT, 0))
+                    return
+                # Evaluate arguments left-to-right; they will be popped by CALL into callee locals.
+                for arg_expr in e.args:
+                    self._emit_expr(arg_expr, layout, ctx)
+                fn_id = self.func_name_to_index[name]
+                self.code.append(Instruction(OpCode.CALL, fn_id))

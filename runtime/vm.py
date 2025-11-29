@@ -9,6 +9,7 @@ class FunctionInfo:
     name: str
     entry_pc: int
     num_locals: int
+    num_params: int
 
 
 class QuinVM:
@@ -111,19 +112,32 @@ class QuinVM:
             elif op is OpCode.CALL:
                 fn_id = int(arg)
                 fn = self.functions[fn_id]
+                # pop arguments from stack (rightmost pushed last), place into new frame locals[0..num_params-1]
+                args: List[int] = []
+                for _ in range(fn.num_params):
+                    if not self.stack:
+                        raise RuntimeError("Stack underflow when popping call arguments")
+                    args.append(self.stack.pop())
+                args.reverse()  # now args[0] is first parameter
                 # push current frame
                 self.call_stack.append((self.pc, self.locals))
                 # set up callee frame
                 self.locals = [0] * fn.num_locals
+                for i, v in enumerate(args):
+                    if i < len(self.locals):
+                        self.locals[i] = v & 0xFFFF
                 self.pc = fn.entry_pc
 
             elif op is OpCode.RET:
+                # Pop return value (or 0 if none), restore caller frame, and push value for caller.
+                ret_val = self.stack.pop() if self.stack else 0
                 if not self.call_stack:
-                    # return from main; if a value is on stack, use it as exit code
-                    return self.stack.pop() if self.stack else 0
+                    # return from main: use value as exit code
+                    return ret_val
                 ret_pc, prev_locals = self.call_stack.pop()
-                self.pc = ret_pc
                 self.locals = prev_locals
+                self.stack.append(ret_val)
+                self.pc = ret_pc
 
             elif op is OpCode.LOAD_LOCAL_IDX:
                 idx = self.stack.pop()
