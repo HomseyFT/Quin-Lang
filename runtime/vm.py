@@ -139,6 +139,44 @@ class QuinVM:
                     raise RuntimeError(f"STORE_LOCAL_IDX out of range: base={base}, idx={idx}, num_locals={len(self.locals)}")
                 self.locals[base + idx] = val
 
+            elif op is OpCode.LOAD_INDIRECT:
+                p = self.stack.pop()
+                if p < 0 or p >= len(self.locals):
+                    raise RuntimeError(f"LOAD_INDIRECT out of range: p={p}, num_locals={len(self.locals)}")
+                self.stack.append(self.locals[p])
+
+            elif op is OpCode.STORE_INDIRECT:
+                v = self.stack.pop()
+                p = self.stack.pop()
+                if p < 0 or p >= len(self.locals):
+                    raise RuntimeError(f"STORE_INDIRECT out of range: p={p}, num_locals={len(self.locals)}")
+                self.locals[p] = v
+
+            elif op is OpCode.MEMCPY_LOCALS:
+                count = self.stack.pop()
+                src = self.stack.pop()
+                dst = self.stack.pop()
+                if count < 0:
+                    raise RuntimeError("MEMCPY_LOCALS negative count")
+                for i in range(count):
+                    si = src + i
+                    di = dst + i
+                    if si < 0 or si >= len(self.locals) or di < 0 or di >= len(self.locals):
+                        raise RuntimeError(f"MEMCPY_LOCALS out of range: src={src}, dst={dst}, count={count}, num_locals={len(self.locals)}")
+                    self.locals[di] = self.locals[si]
+
+            elif op is OpCode.MEMSET_LOCALS:
+                count = self.stack.pop()
+                value = self.stack.pop()
+                dst = self.stack.pop()
+                if count < 0:
+                    raise RuntimeError("MEMSET_LOCALS negative count")
+                for i in range(count):
+                    di = dst + i
+                    if di < 0 or di >= len(self.locals):
+                        raise RuntimeError(f"MEMSET_LOCALS out of range: dst={dst}, count={count}, num_locals={len(self.locals)}")
+                    self.locals[di] = value
+
             elif op is OpCode.PRINT_INT:
                 v = self.stack.pop()
                 print(int(v), end="")

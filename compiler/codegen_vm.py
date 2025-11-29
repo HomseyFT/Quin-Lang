@@ -199,6 +199,26 @@ class CodeGenVM:
             else:
                 # unknown identifier; treat as 0 for now
                 self.code.append(Instruction(OpCode.PUSH_INT, 0))
+        elif isinstance(e, A.AddressOf):
+            # Represent a pointer as a local index into the current frame.
+            if isinstance(e.target, A.Identifier):
+                idx = layout.local_index.get(e.target.name)
+                if idx is not None:
+                    self.code.append(Instruction(OpCode.PUSH_INT, idx))
+                else:
+                    self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            elif isinstance(e.target, A.Index) and isinstance(e.target.array, A.Identifier):
+                arr_name = e.target.array.name
+                if arr_name in layout.arrays:
+                    base = layout.local_index[arr_name]
+                    # pointer = base + index
+                    self._emit_expr(e.target.index, layout, ctx)  # push index
+                    self.code.append(Instruction(OpCode.PUSH_INT, base))
+                    self.code.append(Instruction(OpCode.ADD))
+                else:
+                    self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            else:
+                self.code.append(Instruction(OpCode.PUSH_INT, 0))
         elif isinstance(e, A.Unary):
             self._emit_expr(e.right, layout, ctx)
             if e.op == '-':
@@ -239,6 +259,73 @@ class CodeGenVM:
                 # Unknown index target; push 0
                 self.code.append(Instruction(OpCode.PUSH_INT, 0))
         elif isinstance(e, A.Call):
-            # For now, treat calls as non-existent in VM subset
-            # In future, map function names to indices and emit CALL + RET handling
-            self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            # Handle a few builtins directly in the VM backend.
+            name = e.callee
+            # array_push(xs: int[N], len: int, value: int) -> int (new len)
+            if name == "array_push" and len(e.args) == 3:
+                arr_expr, len_expr, val_expr = e.args
+                if isinstance(arr_expr, A.Identifier) and arr_expr.name in layout.arrays:
+                    base = layout.local_index[arr_expr.name]
+                    # xs[len] = value
+                    # Evaluate value then index, then store
+                    self._emit_expr(val_expr, layout, ctx)      # push value
+                    self._emit_expr(len_expr, layout, ctx)      # push len
+                    self.code.append(Instruction(OpCode.STORE_LOCAL_IDX, base))
+                    # Result: len + 1
+                    self._emit_expr(len_expr, layout, ctx)      # push len again
+                    self.code.append(Instruction(OpCode.PUSH_INT, 1))
+                    self.code.append(Instruction(OpCode.ADD))
+                else:
+                    # Fallback: just return len + 1 evaluated as int
+                    self._emit_expr(len_expr, layout, ctx)
+                    self.code.append(Instruction(OpCode.PUSH_INT, 1))
+                    self.code.append(Instruction(OpCode.ADD))
+            # array_pop(xs: int[N], len: int) -> int (popped value)
+            elif name == "array_pop" and len(e.args) == 2:
+                arr_expr, len_expr = e.args
+                if isinstance(arr_expr, A.Identifier) and arr_expr.name in layout.arrays:
+                    base = layout.local_index[arr_expr.name]
+                    # Compute len-1 on stack and load that element
+                    self._emit_expr(len_expr, layout, ctx)      # push len
+                    self.code.append(Instruction(OpCode.PUSH_INT, 1))
+                    self.code.append(Instruction(OpCode.SUB))   # len - 1
+                    self.code.append(Instruction(OpCode.LOAD_LOCAL_IDX, base))
+                else:
+                    # Fallback: just return 0
+                    self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            # Pointer/memory intrinsics using local-index pointers
+            elif name == "load16" and len(e.args) == 1:
+                # p: ptr -> local index
+                self._emit_expr(e.args[0], layout, ctx)   # push ptr
+                self.code.append(Instruction(OpCode.LOAD_INDIRECT))
+            elif name == "store16" and len(e.args) == 2:
+                # store16(p, value): writes to local indexed by p
+                self._emit_expr(e.args[0], layout, ctx)   # push ptr
+                self._emit_expr(e.args[1], layout, ctx)   # push value
+                # Stack order for STORE_INDIRECT: [..., ptr, value]
+                # We currently have [..., ptr, value]; rearrange to [..., value, ptr]
+                # by using a small pattern: push ptr again, LOAD_INDIRECT not needed; for now, swap via temp
+                # Simpler: emit STORE_INDIRECT expecting [ptr, value], then adjust VM.
+                # But VM currently expects [p, v] in that order.
+                # So we change VM: STORE_INDIRECT pops v then p; here we want [..., ptr, value].
+                # That is already correct; nothing extra needed.
+                self.code.append(Instruction(OpCode.STORE_INDIRECT))
+                # store16 returns void; push 0 as dummy value so expressions have a result
+                self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            elif name == "memcpy" and len(e.args) == 3:
+                # memcpy(dst, src, count): operate on locals as elements
+                self._emit_expr(e.args[0], layout, ctx)  # dst ptr
+                self._emit_expr(e.args[1], layout, ctx)  # src ptr
+                self._emit_expr(e.args[2], layout, ctx)  # count (elements)
+                self.code.append(Instruction(OpCode.MEMCPY_LOCALS))
+                self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            elif name == "memset" and len(e.args) == 3:
+                # memset(dst, value, count): operate on locals as elements
+                self._emit_expr(e.args[0], layout, ctx)  # dst ptr
+                self._emit_expr(e.args[1], layout, ctx)  # value
+                self._emit_expr(e.args[2], layout, ctx)  # count (elements)
+                self.code.append(Instruction(OpCode.MEMSET_LOCALS))
+                self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            else:
+                # For now, treat other calls as returning 0 in VM subset
+                self.code.append(Instruction(OpCode.PUSH_INT, 0))

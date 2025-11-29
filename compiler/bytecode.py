@@ -41,6 +41,12 @@ class OpCode(Enum):
     LOAD_LOCAL_IDX = auto()    # operand: base local index
     STORE_LOCAL_IDX = auto()   # operand: base local index
 
+    # Indirect access using "pointer" as local index
+    LOAD_INDIRECT = auto()     # pop p; push locals[p]
+    STORE_INDIRECT = auto()    # pop v, pop p; locals[p] = v
+    MEMCPY_LOCALS = auto()     # pop count, src, dst; copy locals
+    MEMSET_LOCALS = auto()     # pop count, value, dst; fill locals
+
     # Builtin-style I/O
     PRINT_INT = auto()
     PRINT_STR = auto()
