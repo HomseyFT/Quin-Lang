@@ -2,313 +2,106 @@
 org 0x100
 %include 'runtime/runtime.inc'
 section .text
+global choose
+choose:
+push bp
+mov bp, sp
+xor ax, ax
+neg ax
+sbb ax, ax
+push ax
+xor ax, ax
+push ax
+xor ax, ax
+push ax
+pop dx
+pop cx
+pop bx
+mov ax, cx
+and ax, bx
+not bx
+and dx, bx
+or ax, dx
+mov sp, bp
+pop bp
+ret
+mov sp, bp
+pop bp
+ret
 global main
 main:
 push bp
 mov bp, sp
-sub sp, 36
-xor ax, ax
-mov [bp-6], ax
-xor ax, ax
-mov [bp-8], ax
-xor ax, ax
-mov [bp-10], ax
-mov ax, 0
-mov [bp-8], ax
-mov ax, [bp-8]
-mov dx, ax
-mov si, ax
-shl si, 1
-mov ax, 10
-mov [bp+si-6], ax
-mov ax, dx
-inc ax
-mov [bp-8], ax
-mov ax, [bp-8]
-mov dx, ax
-mov si, ax
-shl si, 1
-mov ax, 20
-mov [bp+si-6], ax
-mov ax, dx
-inc ax
-mov [bp-8], ax
-mov ax, [bp-8]
-mov dx, ax
-mov si, ax
-shl si, 1
-mov ax, 30
-mov [bp+si-6], ax
-mov ax, dx
-inc ax
-mov [bp-8], ax
-mov ax, [bp-8]
-dec ax
-mov si, ax
-shl si, 1
-mov ax, [bp+si-6]
-mov [bp-10], ax
-mov ax, [bp-8]
-push ax
-mov ax, 1
-pop bx
-sub bx, ax
-mov ax, bx
-mov [bp-8], ax
-mov ax, [bp-10]
-call rt_print_num16
-mov ax, [bp-8]
-dec ax
-mov si, ax
-shl si, 1
-mov ax, [bp+si-6]
-mov [bp-10], ax
-mov ax, [bp-8]
-push ax
-mov ax, 1
-pop bx
-sub bx, ax
-mov ax, bx
-mov [bp-8], ax
-mov ax, [bp-10]
-call rt_print_num16
-mov ax, [bp-8]
-dec ax
-mov si, ax
-shl si, 1
-mov ax, [bp+si-6]
-mov [bp-10], ax
-mov ax, [bp-8]
-push ax
-mov ax, 1
-pop bx
-sub bx, ax
-mov ax, bx
-mov [bp-8], ax
-mov ax, [bp-10]
-call rt_print_num16
-xor ax, ax
-mov [bp-12], ax
-xor ax, ax
-mov [bp-14], ax
-xor ax, ax
-mov [bp-16], ax
-xor ax, ax
-mov [bp-18], ax
+sub sp, 10
 mov ax, 1234
-mov [bp-12], ax
-mov ax, 0
-mov [bp-14], ax
-lea ax, [bp-12]
-mov [bp-16], ax
-lea ax, [bp-14]
-mov [bp-18], ax
-mov ax, [bp-16]
-mov bx, ax
-mov ax, 4321
-mov [bx], ax
-mov ax, [bp-12]
-call rt_print_num16
-mov ax, [bp-18]
-mov bx, ax
-mov ax, 1111
-mov [bx], ax
-mov ax, [bp-14]
-call rt_print_num16
-xor ax, ax
-mov [bp-24], ax
-xor ax, ax
-mov [bp-30], ax
-mov ax, 7
+mov [bp-2], ax
+mov ax, 1234
+mov [bp-4], ax
+mov ax, 42
+mov [bp-6], ax
+mov ax, [bp-2]
 push ax
-mov ax, 0
-mov si, ax
-shl si, 1
-pop ax
-mov [bp+si-24], ax
-mov ax, 8
-push ax
-mov ax, 1
-mov si, ax
-shl si, 1
-pop ax
-mov [bp+si-24], ax
-mov ax, 9
-push ax
-mov ax, 2
-mov si, ax
-shl si, 1
-pop ax
-mov [bp+si-24], ax
-mov ax, 0
-mov si, ax
-shl si, 1
-lea ax, [bp+si-30]
-mov di, ax
-mov ax, 0
-mov si, ax
-shl si, 1
-lea ax, [bp+si-24]
-mov si, ax
-mov ax, 6
+mov ax, [bp-4]
+pop bx
+xor ax, bx
 mov cx, ax
-MEMCPY_LOOP1:
-cmp cx, 0
-je MEMCPY_END2
-mov al, [si]
-mov [di], al
-inc si
-inc di
-dec cx
-jmp MEMCPY_LOOP1
-MEMCPY_END2:
-mov ax, 0
-mov si, ax
-shl si, 1
-mov ax, [bp+si-30]
-call rt_print_num16
-mov ax, 1
-mov si, ax
-shl si, 1
-mov ax, [bp+si-30]
-call rt_print_num16
-mov ax, 2
-mov si, ax
-shl si, 1
-mov ax, [bp+si-30]
-call rt_print_num16
-mov ax, 0
-mov si, ax
-shl si, 1
-lea ax, [bp+si-30]
-mov di, ax
-mov ax, 0
-mov dl, al
-mov ax, 6
-mov cx, ax
-MEMSET_LOOP3:
-cmp cx, 0
-je MEMSET_END4
-mov [di], dl
-inc di
-dec cx
-jmp MEMSET_LOOP3
-MEMSET_END4:
-mov ax, 0
-mov si, ax
-shl si, 1
-mov ax, [bp+si-30]
-call rt_print_num16
-mov ax, 1
-mov si, ax
-shl si, 1
-mov ax, [bp+si-30]
-call rt_print_num16
-mov ax, 2
-mov si, ax
-shl si, 1
-mov ax, [bp+si-30]
-call rt_print_num16
+shr cx, 8
+or al, cl
+neg al
+mov cl, 7
+shr al, cl
+and al, 1
+xor al, 1
+mov ah, 0
+cmp ax, 0
+je ELSE1
 mov ax, STR_0
 mov dx, ax
 call rt_print_str
 call rt_print_newline
+jmp ENDIF2
+ELSE1:
+ENDIF2:
+mov ax, [bp-2]
+push ax
+mov ax, [bp-6]
+pop bx
+xor ax, bx
+mov cx, ax
+shr cx, 8
+or al, cl
+neg al
+mov cl, 7
+shr al, cl
+and al, 1
+xor al, 1
+mov ah, 0
+cmp ax, 0
+je T5
+xor ax, ax
+jmp E6
+T5:
+mov ax, 1
+E6:
+cmp ax, 0
+je ELSE3
 mov ax, STR_1
 mov dx, ax
 call rt_print_str
 call rt_print_newline
-mov ax, STR_2
-mov dx, ax
-call rt_print_str
-xor ax, ax
-mov [bp-32], ax
-xor ax, ax
-mov [bp-34], ax
-xor ax, ax
-mov [bp-36], ax
-mov ax, 1
-mov [bp-32], ax
-mov ax, 0
-mov [bp-34], ax
-mov ax, [bp-34]
-cmp ax, 0
-je AND_FALSE6
-mov ax, [bp-34]
-cmp ax, 0
-je AND_FALSE6
-mov ax, 1
-jmp AND_END5
-AND_FALSE6:
-xor ax, ax
-AND_END5:
-mov [bp-36], ax
-mov ax, [bp-32]
-cmp ax, 0
-jne OR_TRUE8
-mov ax, [bp-34]
-cmp ax, 0
-jne OR_TRUE8
-xor ax, ax
-jmp OR_END7
-OR_TRUE8:
-mov ax, 1
-OR_END7:
-mov [bp-36], ax
-mov ax, [bp-32]
-cmp ax, 0
-je AND_FALSE12
-mov ax, [bp-34]
-cmp ax, 0
-je T13
-xor ax, ax
-jmp E14
-T13:
-mov ax, 1
-E14:
-cmp ax, 0
-je AND_FALSE12
-mov ax, 1
-jmp AND_END11
-AND_FALSE12:
-xor ax, ax
-AND_END11:
-cmp ax, 0
-je ELSE9
-mov ax, 1
+jmp ENDIF4
+ELSE3:
+ENDIF4:
+call choose
+mov [bp-8], ax
+call choose
+mov [bp-10], ax
+mov ax, [bp-8]
 call rt_print_num16
 call rt_print_newline
-jmp ENDIF10
-ELSE9:
-ENDIF10:
-mov ax, [bp-32]
-cmp ax, 0
-jne OR_TRUE18
-mov ax, [bp-34]
-cmp ax, 0
-je AND_FALSE20
-mov ax, 0
-cmp ax, 0
-je AND_FALSE20
-mov ax, 1
-jmp AND_END19
-AND_FALSE20:
-xor ax, ax
-AND_END19:
-cmp ax, 0
-jne OR_TRUE18
-xor ax, ax
-jmp OR_END17
-OR_TRUE18:
-mov ax, 1
-OR_END17:
-cmp ax, 0
-je ELSE15
-mov ax, 2
+mov ax, [bp-10]
 call rt_print_num16
 call rt_print_newline
-jmp ENDIF16
-ELSE15:
-ENDIF16:
 mov ax, 0
 mov sp, bp
 pop bp
@@ -317,6 +110,5 @@ mov sp, bp
 pop bp
 ret
 section .data
-STR_0 db ' ','$'
-STR_1 db 'Hello','$'
-STR_2 db 'My Name Is Nathan','$'
+STR_0 db 'x == y$$','$'
+STR_1 db 'x != z$$','$'

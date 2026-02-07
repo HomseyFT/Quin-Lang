@@ -344,6 +344,58 @@ println(buf[1]);  // 0
 println(buf[2]);  // 0
 ```
 
+### Constant-time style primitives
+
+These are low-level helpers intended for constant-time-ish operations on the 8086 backend. The VM backend preserves their *semantics* but does not attempt to model timing.
+
+#### `ct_eq`
+
+```quin
+ct_eq(a: int, b: int): bool
+```
+
+- Returns `true` if `a == b`, otherwise `false`.
+- Intended to be lowered to a branchless equality check on 16-bit integers on the 8086 backend.
+
+Typical usage:
+
+```quin
+let x: int = 1234;
+let y: int = 1234;
+let z: int = 42;
+
+if (ct_eq(x, y)) {
+    println("x == y$");
+}
+if (!ct_eq(x, z)) {
+    println("x != z$");
+}
+```
+
+#### `ct_select`
+
+```quin
+ct_select(mask: int, x: int, y: int): int
+```
+
+- Returns `x` when `mask` is nonzero, otherwise returns `y`.
+- Typical constant-time style usage treats `mask` as 0 or 1 (or as a derived mask) so that the backend can implement this without branches.
+- Semantically equivalent to `mask != 0 ? x : y`, but lowered to branchless arithmetic/bitwise code on the 8086 backend.
+
+Example:
+
+```quin
+let a: int = 10;
+let b: int = 20;
+let flag: int = 1;   // choose a
+let res1: int = ct_select(flag, a, b);
+println(res1);       // 10
+
+flag = 0;            // choose b
+let res2: int = ct_select(flag, a, b);
+println(res2);       // 20
+```
+
 ## Notes and limitations
 
 - No dynamic allocation yet; all arrays are fixed-size `int[N]` on the stack.

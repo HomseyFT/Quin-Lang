@@ -382,6 +382,26 @@ class CodeGenVM:
                 self._emit_expr(e.args[2], layout, ctx)  # count (elements)
                 self.code.append(Instruction(OpCode.MEMSET_LOCALS))
                 self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            # Constant-time-style primitives (semantics only; actual timing depends on backend).
+            elif name == "ct_eq" and len(e.args) == 2:
+                # ct_eq(a, b): bool-like result 0/1.
+                self._emit_expr(e.args[0], layout, ctx)
+                self._emit_expr(e.args[1], layout, ctx)
+                self.code.append(Instruction(OpCode.CMP_EQ))
+            elif name == "ct_select" and len(e.args) == 3:
+                # ct_select(mask, x, y): y + mask * (x - y).
+                # We assume mask is typically 0 or 1.
+                mask_expr, x_expr, y_expr = e.args
+                # Compute (x - y).
+                self._emit_expr(x_expr, layout, ctx)   # push x
+                self._emit_expr(y_expr, layout, ctx)   # push y
+                self.code.append(Instruction(OpCode.SUB))  # x - y
+                # Multiply by mask.
+                self._emit_expr(mask_expr, layout, ctx)  # push mask
+                self.code.append(Instruction(OpCode.MUL))  # (x - y) * mask
+                # Add y back.
+                self._emit_expr(y_expr, layout, ctx)
+                self.code.append(Instruction(OpCode.ADD))
             else:
                 # Regular user-defined function call: evaluate args then CALL by function index.
                 if name not in self.func_name_to_index:
