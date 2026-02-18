@@ -1,0 +1,21 @@
+name: Notify IDE of Changes
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'examples/**'
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger IDE Sync
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.IDE_SYNC_TOKEN }}
+          repository: ${{ github.repository_owner }}/QuinLang-IDE
+          event-type: compiler-updated
+          client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'

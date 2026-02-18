@@ -63,6 +63,14 @@ class CodeGen8086:
             self._emit_epilogue()
         elif isinstance(st, A.ExprStmt):
             self._emit_expr(st.expr, ctx)
+        elif isinstance(st, A.InlineAsm):
+            # Splice raw assembly lines directly into the output.
+            for line in st.code.splitlines():
+                if line.strip() != "":
+                    self.em.emit(line)
+        elif isinstance(st, A.VmAsm):
+            # vm_asm is VM-specific inline IR; 8086 backend does not support it yet.
+            raise RuntimeError("vm_asm blocks are only supported by the VM backend")
         elif isinstance(st, A.VarDecl):
             # initialize or zero
             if st.init:

@@ -134,6 +134,13 @@ class Parser:
             self._consume(TokenType.RIGHT_PAREN, "Expected ')' after println expression")
             self._consume(TokenType.SEMICOLON, "Expected ';' after println statement")
             return A.PrintLn(expr)
+        if self._match(TokenType.ASM):
+            # Simple inline 8086 asm form: asm "...";
+            tok = self._consume(TokenType.STRING, "Expected string literal after 'asm'")
+            self._consume(TokenType.SEMICOLON, "Expected ';' after asm statement")
+            return A.InlineAsm(tok.literal)
+        if self._match(TokenType.VM_ASM):
+            return self._vm_asm_block()
         if self._match(TokenType.RETURN):
             value: Optional[A.Expr] = None
             if not self._check(TokenType.SEMICOLON):
@@ -253,6 +260,26 @@ class Parser:
                 continue
             break
         return expr
+
+    def _vm_asm_block(self) -> A.Stmt:
+        # Parse: vm_asm { INSTR ...; INSTR2 ...; }
+        self._consume(TokenType.LEFT_BRACE, "Expected '{' after 'vm_asm'")
+        lines = []
+        current_parts = []
+        while not self._check(TokenType.RIGHT_BRACE):
+            tok = self._advance()
+            if tok.type == TokenType.SEMICOLON:
+                # End of one vm_asm instruction line.
+                current_parts.append(tok.lexeme)
+                line = " ".join(current_parts).strip()
+                if line:
+                    lines.append(line)
+                current_parts = []
+            else:
+                current_parts.append(tok.lexeme)
+        self._consume(TokenType.RIGHT_BRACE, "Expected '}' after vm_asm block")
+        code = "\n".join(lines)
+        return A.VmAsm(code)
 
     def _primary(self) -> A.Expr:
         if self._match(TokenType.FALSE):

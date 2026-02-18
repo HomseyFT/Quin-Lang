@@ -52,6 +52,8 @@ class TokenType(Enum):
     PTR = auto()
     PRINT = auto()
     PRINTLN = auto()
+    ASM = auto()
+    VM_ASM = auto()
 
     EOF = auto()
 
@@ -70,6 +72,8 @@ KEYWORDS = {
     "print": TokenType.PRINT,
     "println": TokenType.PRINTLN,
     "ptr": TokenType.PTR,
+    "asm": TokenType.ASM,
+    "vm_asm": TokenType.VM_ASM,
 }
 
 @dataclass
@@ -103,6 +107,8 @@ KEYWORDS = {
     "print": TokenType.PRINT,
     "println": TokenType.PRINTLN,
     "ptr": TokenType.PTR,
+    "asm": TokenType.ASM,
+    "vm_asm": TokenType.VM_ASM,
 }
 
 @dataclass

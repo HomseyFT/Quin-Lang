@@ -2,105 +2,18 @@
 org 0x100
 %include 'runtime/runtime.inc'
 section .text
-global choose
-choose:
-push bp
-mov bp, sp
-xor ax, ax
-neg ax
-sbb ax, ax
-push ax
-xor ax, ax
-push ax
-xor ax, ax
-push ax
-pop dx
-pop cx
-pop bx
-mov ax, cx
-and ax, bx
-not bx
-and dx, bx
-or ax, dx
-mov sp, bp
-pop bp
-ret
-mov sp, bp
-pop bp
-ret
 global main
 main:
 push bp
 mov bp, sp
-sub sp, 10
-mov ax, 1234
-mov [bp-2], ax
-mov ax, 1234
-mov [bp-4], ax
-mov ax, 42
-mov [bp-6], ax
-mov ax, [bp-2]
-push ax
-mov ax, [bp-4]
-pop bx
-xor ax, bx
-mov cx, ax
-shr cx, 8
-or al, cl
-neg al
-mov cl, 7
-shr al, cl
-and al, 1
-xor al, 1
-mov ah, 0
-cmp ax, 0
-je ELSE1
 mov ax, STR_0
 mov dx, ax
 call rt_print_str
 call rt_print_newline
-jmp ENDIF2
-ELSE1:
-ENDIF2:
-mov ax, [bp-2]
-push ax
-mov ax, [bp-6]
-pop bx
-xor ax, bx
-mov cx, ax
-shr cx, 8
-or al, cl
-neg al
-mov cl, 7
-shr al, cl
-and al, 1
-xor al, 1
-mov ah, 0
-cmp ax, 0
-je T5
-xor ax, ax
-jmp E6
-T5:
-mov ax, 1
-E6:
-cmp ax, 0
-je ELSE3
+mov ax, 1234\ncall rt_print_num16\ncall rt_print_newline
 mov ax, STR_1
 mov dx, ax
 call rt_print_str
-call rt_print_newline
-jmp ENDIF4
-ELSE3:
-ENDIF4:
-call choose
-mov [bp-8], ax
-call choose
-mov [bp-10], ax
-mov ax, [bp-8]
-call rt_print_num16
-call rt_print_newline
-mov ax, [bp-10]
-call rt_print_num16
 call rt_print_newline
 mov ax, 0
 mov sp, bp
@@ -110,5 +23,5 @@ mov sp, bp
 pop bp
 ret
 section .data
-STR_0 db 'x == y$$','$'
-STR_1 db 'x != z$$','$'
+STR_0 db 'Before asm$$','$'
+STR_1 db 'After asm$$','$'

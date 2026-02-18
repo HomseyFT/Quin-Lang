@@ -108,6 +108,41 @@ while (condition) {
 
 Loops while `condition` is true.
 
+### Inline assembly (8086 backend only)
+
+```quin
+asm "mov ax, 1";
+```
+
+- Inserts the given string as one or more raw 8086 assembly lines in the generated `.asm`.
+- The string may contain embedded newlines (`"mov ax, 1\nadd ax, 2"`). Each line is emitted as-is.
+- Only executed by the 8086 backend (`compiler.driver`). The VM backend (`compiler.driver_vm`) parses `asm` but ignores it (treats it as a no-op).
+- You are responsible for preserving the calling convention, stack discipline, and any callee-saved registers.
+
+### VM inline assembly (VM backend only)
+
+```quin
+fn main(): int {
+    let x: int;
+    vm_asm {
+        push_int 42;
+        store_local x;
+    }
+    println(x);
+    return 0;
+}
+```
+
+- `vm_asm { ... }` introduces a small, VM-level inline IR block that is lowered directly to VM bytecode.
+- Each line inside the block is a simple instruction ending with `;`, such as:
+  - `push_int 123;`
+  - `load_local x;`
+  - `store_local x;`
+  - `add;`, `sub;`, `mul;`, `div;`, `neg;`, `not;`
+  - `cmp_eq;`, `cmp_ne;`, `cmp_lt;`, `cmp_le;`, `cmp_gt;`, `cmp_ge;`
+- Only the VM backend (`compiler.driver_vm`) executes `vm_asm` blocks. The 8086 backend currently rejects them.
+- This is intended for advanced users who want fine-grained control over VM stack/locals without writing raw 8086 assembly.
+
 ## Expressions
 
 ### Literals
