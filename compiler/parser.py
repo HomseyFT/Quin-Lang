@@ -14,10 +14,18 @@ class Parser:
         self.current = 0
 
     def parse(self) -> A.Program:
+        includes: List[A.Include] = []
+        while self._match(TokenType.INCLUDE):
+            includes.append(self._include())
         funcs: List[A.Function] = []
         while not self._is_at_end():
             funcs.append(self._function())
-        return A.Program(funcs)
+        return A.Program(includes, funcs)
+
+    def _include(self) -> A.Include:
+        path_tok = self._consume(TokenType.STRING, "Expected path string after 'include'")
+        self._consume(TokenType.SEMICOLON, "Expected ';' after include path")
+        return A.Include(path_tok.literal)
 
     # Helpers
     def _match(self, *types: TokenType) -> bool:

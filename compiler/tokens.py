@@ -54,6 +54,7 @@ class TokenType(Enum):
     PRINTLN = auto()
     ASM = auto()
     VM_ASM = auto()
+    INCLUDE = auto()
 
     EOF = auto()
 
@@ -74,41 +75,7 @@ KEYWORDS = {
     "ptr": TokenType.PTR,
     "asm": TokenType.ASM,
     "vm_asm": TokenType.VM_ASM,
-}
-
-@dataclass
-class Token:
-    type: TokenType
-    lexeme: str
-    line: int
-    col: int
-    literal: Optional[object] = None
-
-    def __repr__(self) -> str:
-        lit = f" {self.literal!r}" if self.literal is not None else ""
-        return f"{self.type.name} '{self.lexeme}'{lit} (@{self.line}:{self.col})"
-    PRINT = auto()
-    PRINTLN = auto()
-
-    EOF = auto()
-
-KEYWORDS = {
-    "fn": TokenType.FN,
-    "let": TokenType.LET,
-    "return": TokenType.RETURN,
-    "if": TokenType.IF,
-    "else": TokenType.ELSE,
-    "while": TokenType.WHILE,
-    "true": TokenType.TRUE,
-    "false": TokenType.FALSE,
-    "int": TokenType.INT,
-    "str": TokenType.STR,
-    "void": TokenType.VOID,
-    "print": TokenType.PRINT,
-    "println": TokenType.PRINTLN,
-    "ptr": TokenType.PTR,
-    "asm": TokenType.ASM,
-    "vm_asm": TokenType.VM_ASM,
+    "include": TokenType.INCLUDE,
 }
 
 @dataclass

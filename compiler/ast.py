@@ -111,5 +111,10 @@ class Function:
     body: List[Stmt]
 
 @dataclass
+class Include:
+    path: str  # The string literal path from the include statement
+
+@dataclass
 class Program:
+    includes: List[Include]
     functions: List[Function]
