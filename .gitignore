@@ -33,6 +33,7 @@ desktop.ini
 tests/**/build/
 tests/**/*.asm
 tests/**/*.com
+tests/include/*.ql
 
 # Virtual environments
 venv/
