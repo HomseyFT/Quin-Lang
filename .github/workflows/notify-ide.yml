@@ -15,7 +15,7 @@ jobs:
       - name: Trigger IDE Sync
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.IDE_SYNC_TOKEN }}
+token: ${{ secrets.IDE_SYNC }}
           repository: ${{ github.repository_owner }}/QuinLang-IDE
           event-type: compiler-updated
           client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
