@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Build outputs
+build/
+*.asm
+*.com
+*.o
+*.obj
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test outputs
+tests/**/build/
+tests/**/*.asm
+tests/**/*.com
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Coverage / Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
