@@ -159,6 +159,11 @@ class CodeGenVM:
             self._emit_if(st, layout, ctx)
         elif isinstance(st, A.While):
             self._emit_while(st, layout, ctx)
+        elif isinstance(st, A.InlineAsm):
+            # VM backend ignores raw 8086 inline asm; only the 8086 backend executes it.
+            return
+        elif isinstance(st, A.VmAsm):
+            self._emit_vm_asm(st, layout)
 
     def _emit_if(self, st: A.If, layout: FunctionLayout, ctx: Context):
         # cond
@@ -192,6 +197,76 @@ class CodeGenVM:
         self.code.append(Instruction(OpCode.JMP, loop_start))
         loop_end = len(self.code)
         self.code[jz_index].arg = loop_end
+
+    def _emit_vm_asm(self, vm_asm: A.VmAsm, layout: FunctionLayout) -> None:
+        """Lower a vm_asm inline block into VM bytecode.
+
+        Supported v1 instructions (line-based, each ending with ';'):
+          - push_int N;
+          - load_local NAME;
+          - store_local NAME;
+          - add; sub; mul; div; neg; not;
+          - cmp_eq; cmp_ne; cmp_lt; cmp_le; cmp_gt; cmp_ge;
+
+        Lines are parsed very simply by splitting on whitespace; semicolons
+        are kept by the parser but are not semantically significant here.
+        """
+        for raw in vm_asm.code.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.endswith(";"):
+                line = line[:-1].strip()
+            if not line:
+                continue
+            parts = line.split()
+            op = parts[0]
+            args = parts[1:]
+
+            if op == "push_int" and len(args) == 1:
+                try:
+                    value = int(args[0], 0)
+                except ValueError:
+                    raise RuntimeError(f"vm_asm push_int expects integer literal, got '{args[0]}'")
+                self.code.append(Instruction(OpCode.PUSH_INT, value))
+            elif op == "load_local" and len(args) == 1:
+                name = args[0]
+                if name not in layout.local_index:
+                    raise RuntimeError(f"vm_asm load_local unknown local '{name}'")
+                idx = layout.local_index[name]
+                self.code.append(Instruction(OpCode.LOAD_LOCAL, idx))
+            elif op == "store_local" and len(args) == 1:
+                name = args[0]
+                if name not in layout.local_index:
+                    raise RuntimeError(f"vm_asm store_local unknown local '{name}'")
+                idx = layout.local_index[name]
+                self.code.append(Instruction(OpCode.STORE_LOCAL, idx))
+            elif op == "add" and not args:
+                self.code.append(Instruction(OpCode.ADD))
+            elif op == "sub" and not args:
+                self.code.append(Instruction(OpCode.SUB))
+            elif op == "mul" and not args:
+                self.code.append(Instruction(OpCode.MUL))
+            elif op == "div" and not args:
+                self.code.append(Instruction(OpCode.DIV))
+            elif op == "neg" and not args:
+                self.code.append(Instruction(OpCode.NEG))
+            elif op == "not" and not args:
+                self.code.append(Instruction(OpCode.NOT))
+            elif op == "cmp_eq" and not args:
+                self.code.append(Instruction(OpCode.CMP_EQ))
+            elif op == "cmp_ne" and not args:
+                self.code.append(Instruction(OpCode.CMP_NE))
+            elif op == "cmp_lt" and not args:
+                self.code.append(Instruction(OpCode.CMP_LT))
+            elif op == "cmp_le" and not args:
+                self.code.append(Instruction(OpCode.CMP_LE))
+            elif op == "cmp_gt" and not args:
+                self.code.append(Instruction(OpCode.CMP_GT))
+            elif op == "cmp_ge" and not args:
+                self.code.append(Instruction(OpCode.CMP_GE))
+            else:
+                raise RuntimeError(f"Unknown or malformed vm_asm instruction: '{raw}'")
 
     def _emit_expr(self, e: A.Expr, layout: FunctionLayout, ctx: Context):
         if isinstance(e, A.Literal):
@@ -382,6 +457,26 @@ class CodeGenVM:
                 self._emit_expr(e.args[2], layout, ctx)  # count (elements)
                 self.code.append(Instruction(OpCode.MEMSET_LOCALS))
                 self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            # Constant-time-style primitives (semantics only; actual timing depends on backend).
+            elif name == "ct_eq" and len(e.args) == 2:
+                # ct_eq(a, b): bool-like result 0/1.
+                self._emit_expr(e.args[0], layout, ctx)
+                self._emit_expr(e.args[1], layout, ctx)
+                self.code.append(Instruction(OpCode.CMP_EQ))
+            elif name == "ct_select" and len(e.args) == 3:
+                # ct_select(mask, x, y): y + mask * (x - y).
+                # We assume mask is typically 0 or 1.
+                mask_expr, x_expr, y_expr = e.args
+                # Compute (x - y).
+                self._emit_expr(x_expr, layout, ctx)   # push x
+                self._emit_expr(y_expr, layout, ctx)   # push y
+                self.code.append(Instruction(OpCode.SUB))  # x - y
+                # Multiply by mask.
+                self._emit_expr(mask_expr, layout, ctx)  # push mask
+                self.code.append(Instruction(OpCode.MUL))  # (x - y) * mask
+                # Add y back.
+                self._emit_expr(y_expr, layout, ctx)
+                self.code.append(Instruction(OpCode.ADD))
             else:
                 # Regular user-defined function call: evaluate args then CALL by function index.
                 if name not in self.func_name_to_index:

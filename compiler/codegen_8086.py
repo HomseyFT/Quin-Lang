@@ -63,6 +63,14 @@ class CodeGen8086:
             self._emit_epilogue()
         elif isinstance(st, A.ExprStmt):
             self._emit_expr(st.expr, ctx)
+        elif isinstance(st, A.InlineAsm):
+            # Splice raw assembly lines directly into the output.
+            for line in st.code.splitlines():
+                if line.strip() != "":
+                    self.em.emit(line)
+        elif isinstance(st, A.VmAsm):
+            # vm_asm is VM-specific inline IR; 8086 backend does not support it yet.
+            raise RuntimeError("vm_asm blocks are only supported by the VM backend")
         elif isinstance(st, A.VarDecl):
             # initialize or zero
             if st.init:
@@ -366,6 +374,53 @@ class CodeGen8086:
                 self.em.emit("dec cx")
                 self.em.emit(f"jmp {loop_lbl}")
                 self.em.label(end_lbl)
+                return
+            # ct_eq(a: int, b: int) -> bool (0/1 in AX)
+            if name == "ct_eq" and len(e.args) == 2:
+                # Evaluate a and b into AX/BX, then compute a ^ b.
+                self._emit_expr(e.args[0], ctx)   # AX = a
+                self.em.emit("push ax")
+                self._emit_expr(e.args[1], ctx)   # AX = b
+                self.em.emit("pop bx")           # BX = a
+                self.em.emit("xor ax, bx")       # AX = a ^ b
+                # Reduce to a single bit and invert so equal -> 1, not equal -> 0.
+                # Combine high and low bytes.
+                self.em.emit("mov cx, ax")
+                self.em.emit("shr cx, 8")        # high byte into CL
+                self.em.emit("or al, cl")        # AL |= high byte
+                # Now AL == 0 iff a == b, else nonzero.
+                # Turn nonzero into 1 using two's complement trick.
+                self.em.emit("neg al")
+                self.em.emit("mov cl, 7")
+                self.em.emit("shr al, cl")       # AL = 0 or 1
+                self.em.emit("and al, 1")
+                # Invert so equal -> 1, not equal -> 0.
+                self.em.emit("xor al, 1")
+                self.em.emit("mov ah, 0")
+                return
+            # ct_select(mask: int, x: int, y: int) -> int
+            if name == "ct_select" and len(e.args) == 3:
+                mask_expr, x_expr, y_expr = e.args
+                # Evaluate mask and turn it into 0x0000 or 0xFFFF using NEG+SBB.
+                self._emit_expr(mask_expr, ctx)   # AX = mask
+                self.em.emit("neg ax")
+                self.em.emit("sbb ax, ax")       # AX = 0x0000 if mask==0, else 0xFFFF
+                self.em.emit("push ax")          # [mask_word]
+                # Evaluate x and y and save them.
+                self._emit_expr(x_expr, ctx)      # AX = x
+                self.em.emit("push ax")          # [x, mask]
+                self._emit_expr(y_expr, ctx)      # AX = y
+                self.em.emit("push ax")          # [y, x, mask]
+                # Pop into registers: DX=y, CX=x, BX=mask_word.
+                self.em.emit("pop dx")           # DX = y
+                self.em.emit("pop cx")           # CX = x
+                self.em.emit("pop bx")           # BX = mask_word
+                # Compute (mask & x) | (~mask & y) into AX.
+                self.em.emit("mov ax, cx")       # AX = x
+                self.em.emit("and ax, bx")       # AX = mask & x
+                self.em.emit("not bx")           # BX = ~mask
+                self.em.emit("and dx, bx")       # DX = ~mask & y
+                self.em.emit("or ax, dx")        # AX = selected value
                 return
             # array_push(xs: int[N], len: int, value: int) -> int (new len)
             if name == "array_push" and len(e.args) == 3:

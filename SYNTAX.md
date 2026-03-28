@@ -108,6 +108,41 @@ while (condition) {
 
 Loops while `condition` is true.
 
+### Inline assembly (8086 backend only)
+
+```quin
+asm "mov ax, 1";
+```
+
+- Inserts the given string as one or more raw 8086 assembly lines in the generated `.asm`.
+- The string may contain embedded newlines (`"mov ax, 1\nadd ax, 2"`). Each line is emitted as-is.
+- Only executed by the 8086 backend (`compiler.driver`). The VM backend (`compiler.driver_vm`) parses `asm` but ignores it (treats it as a no-op).
+- You are responsible for preserving the calling convention, stack discipline, and any callee-saved registers.
+
+### VM inline assembly (VM backend only)
+
+```quin
+fn main(): int {
+    let x: int;
+    vm_asm {
+        push_int 42;
+        store_local x;
+    }
+    println(x);
+    return 0;
+}
+```
+
+- `vm_asm { ... }` introduces a small, VM-level inline IR block that is lowered directly to VM bytecode.
+- Each line inside the block is a simple instruction ending with `;`, such as:
+  - `push_int 123;`
+  - `load_local x;`
+  - `store_local x;`
+  - `add;`, `sub;`, `mul;`, `div;`, `neg;`, `not;`
+  - `cmp_eq;`, `cmp_ne;`, `cmp_lt;`, `cmp_le;`, `cmp_gt;`, `cmp_ge;`
+- Only the VM backend (`compiler.driver_vm`) executes `vm_asm` blocks. The 8086 backend currently rejects them.
+- This is intended for advanced users who want fine-grained control over VM stack/locals without writing raw 8086 assembly.
+
 ## Expressions
 
 ### Literals
@@ -342,6 +377,58 @@ memset(&buf[0], 0, 6);  // zero 3 ints
 println(buf[0]);  // 0
 println(buf[1]);  // 0
 println(buf[2]);  // 0
+```
+
+### Constant-time style primitives
+
+These are low-level helpers intended for constant-time-ish operations on the 8086 backend. The VM backend preserves their *semantics* but does not attempt to model timing.
+
+#### `ct_eq`
+
+```quin
+ct_eq(a: int, b: int): bool
+```
+
+- Returns `true` if `a == b`, otherwise `false`.
+- Intended to be lowered to a branchless equality check on 16-bit integers on the 8086 backend.
+
+Typical usage:
+
+```quin
+let x: int = 1234;
+let y: int = 1234;
+let z: int = 42;
+
+if (ct_eq(x, y)) {
+    println("x == y$");
+}
+if (!ct_eq(x, z)) {
+    println("x != z$");
+}
+```
+
+#### `ct_select`
+
+```quin
+ct_select(mask: int, x: int, y: int): int
+```
+
+- Returns `x` when `mask` is nonzero, otherwise returns `y`.
+- Typical constant-time style usage treats `mask` as 0 or 1 (or as a derived mask) so that the backend can implement this without branches.
+- Semantically equivalent to `mask != 0 ? x : y`, but lowered to branchless arithmetic/bitwise code on the 8086 backend.
+
+Example:
+
+```quin
+let a: int = 10;
+let b: int = 20;
+let flag: int = 1;   // choose a
+let res1: int = ct_select(flag, a, b);
+println(res1);       // 10
+
+flag = 0;            // choose b
+let res2: int = ct_select(flag, a, b);
+println(res2);       // 20
 ```
 
 ## Notes and limitations
