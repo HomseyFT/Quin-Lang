@@ -183,10 +183,6 @@ class Parser:
             expr = A.Binary(expr, op, right)
         return expr
 
-    def _assignment(self) -> A.Expr:
-        # assignment handled at statement level for simplicity
-        return self._equality()
-
     def _equality(self) -> A.Expr:
         expr = self._comparison()
         while self._match(TokenType.EQUAL_EQUAL, TokenType.BANG_EQUAL):
@@ -246,6 +242,7 @@ class Parser:
                 expr = A.Call(expr.name, args)
                 continue
             # Indexing: expr '[' expression ']'
+            # ALSO: Indexing: any expression can be the base (e.g. chained arr[i][j])
             if self._match(TokenType.LEFT_BRACKET):
                 index_expr = self._expression()
                 self._consume(TokenType.RIGHT_BRACKET, "Expected ']' after index expression")

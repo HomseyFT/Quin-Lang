@@ -1,5 +1,12 @@
+
 from typing import List
 from .tokens import Token, TokenType, KEYWORDS
+
+class LexError(Exception):
+    def __init__(self, message: str, line: int, col: int):
+        super().__init__(message)
+        self.line = line
+        self.col = col
 
 class Lexer:
     def __init__(self, source: str):
@@ -113,9 +120,11 @@ class Lexer:
         if c.isdigit():
             self._number(); return
         if c.isalpha() or c == '_':
-            self._identifier(); return
-
-        # Unknown character, skip for now; in a real compiler we'd report an error
+            self._identifier(); return # type: ignore        
+        raise LexError(
+            f"Unexpected character '{c}'",
+            self.line,
+            self.col - 1,)
 
     def _string(self):
         value_chars = []
@@ -138,7 +147,7 @@ class Lexer:
         if self.source[self.start] == '0' and self._peek() in ('x', 'X'):
             # consume 'x' or 'X'
             self._advance()
-            while True:
+ while True:
                 ch = self._peek()
                 if ch.isdigit() or ('a' <= ch.lower() <= 'f'):
                     self._advance()

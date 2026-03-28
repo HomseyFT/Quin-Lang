@@ -82,16 +82,20 @@ class SemanticAnalyzer:
             scope.define(Symbol(p.name, t))
         saw_return = False
         for st in fn.body:
-            self._analyze_stmt(st, scope)
+            self._analyze_stmt(st, scope. sig.ret) # type: ignore
+                                                   # pass return type above
             if isinstance(st, A.Return):
                 saw_return = True
         # For non-void functions, require at least one return
+        # Note: saw_return only detects top-level returns. Returns inside if/while
+        # branches are not tracked — a function with all returns inside branches
+        # will incorrectly trigger this error. Full CFG analysis (which I will implement)         # will fix this.
         if sig.ret != Void and not saw_return:
             raise SemanticError(f"Function '{fn.name}' missing return statement")
 
-    def _analyze_stmt(self, st: A.Stmt, scope: Scope):
+    def _analyze_stmt(self, st: A.Stmt, scope: Scope, ret_type: Type = Void):
         if isinstance(st, A.VarDecl):
-            var_type = type_from_name(st.type_name) if st.type_name else None
+            var_type = type_from_name(# Indexing: any expression can be the base (e.g. chained arr[i][j])# Indexing: any expression can be the base (e.g. chained arr[i][j])st.type_name) if st.type_name else None
             if st.init is not None:
                 init_t = self._analyze_expr(st.init, scope)
                 if var_type is None:
@@ -127,23 +131,29 @@ class SemanticAnalyzer:
             if val_t not in (Int, Str):
                 raise SemanticError("print/println expect int or str")
         elif isinstance(st, A.Return):
-            # We can't access function return type easily here without passing it; for simplicity, allow any
+            if ret_type == Void and st.value is not None:
+                raise SemanticError("Void function cannot return a value")
+            if ret_type != Void and st.value is None:
+                raise SemanticError(f"Expected return value of type {ret_type}")
             if st.value is not None:
-                self._analyze_expr(st.value, scope)
+                val_t = self._analyze_expr(st.value, scope)
+                if val_t != ret_type:
+                    raise SemanticError
+                        (f"Return type mismatch: expected {ret_type}, got {val_t}")
         elif isinstance(st, A.If):
             self._analyze_expr(st.cond, scope)
             then_scope = Scope(scope)
             for s in st.then_block:
-                self._analyze_stmt(s, then_scope)
+                self._analyze_stmt(s, then_scope, ret_type)
             if st.else_block:
                 else_scope = Scope(scope)
                 for s in st.else_block:
-                    self._analyze_stmt(s, else_scope)
+                    self._analyze_stmt(s, else_scope, ret_type)
         elif isinstance(st, A.While):
             self._analyze_expr(st.cond, scope)
             body_scope = Scope(scope)
             for s in st.body:
-                self._analyze_stmt(s, body_scope)
+                self._analyze_stmt(s, body_scope, ret_type)
         elif isinstance(st, A.ExprStmt):
             self._analyze_expr(st.expr, scope)
         else:
