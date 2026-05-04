@@ -224,7 +224,7 @@ class Parser:
 
     def _factor(self) -> A.Expr:
         expr = self._unary()
-        while self._match(TokenType.STAR, TokenType.SLASH):
+        while self._match(TokenType.STAR, TokenType.SLASH, TokenType.PERCENT):  # Add modulo operator
             op = self._previous().lexeme
             right = self._unary()
             expr = A.Binary(expr, op, right)

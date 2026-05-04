@@ -1,4 +1,3 @@
-
 from typing import List
 from .tokens import Token, TokenType, KEYWORDS
 
@@ -90,6 +89,8 @@ class Lexer:
             self._add_token(TokenType.SEMICOLON); return
         if c == '*':
             self._add_token(TokenType.STAR); return
+        if c == '%':
+            self._add_token(TokenType.PERCENT); return
         if c == '|':
             if self._match('|'):
                 self._add_token(TokenType.OR_OR); return
@@ -147,7 +148,7 @@ class Lexer:
         if self.source[self.start] == '0' and self._peek() in ('x', 'X'):
             # consume 'x' or 'X'
             self._advance()
- while True:
+            while True:
                 ch = self._peek()
                 if ch.isdigit() or ('a' <= ch.lower() <= 'f'):
                     self._advance()

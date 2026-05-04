@@ -31,6 +31,7 @@ class TokenType(Enum):
     LESS_EQUAL = auto()
     AND_AND = auto()
     OR_OR = auto()
+    PERCENT = auto()  # New token type for modulo operator
 
     # Literals
     IDENTIFIER = auto()
