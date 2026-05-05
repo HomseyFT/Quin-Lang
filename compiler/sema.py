@@ -82,20 +82,16 @@ class SemanticAnalyzer:
             scope.define(Symbol(p.name, t))
         saw_return = False
         for st in fn.body:
-            self._analyze_stmt(st, scope. sig.ret) # type: ignore
-                                                   # pass return type above
+            self._analyze_stmt(st, scope, sig.ret)   # FIXED: removed space and dot
             if isinstance(st, A.Return):
                 saw_return = True
-        # For non-void functions, require at least one return
-        # Note: saw_return only detects top-level returns. Returns inside if/while
-        # branches are not tracked — a function with all returns inside branches
-        # will incorrectly trigger this error. Full CFG analysis (which I will implement)         # will fix this.
         if sig.ret != Void and not saw_return:
             raise SemanticError(f"Function '{fn.name}' missing return statement")
 
     def _analyze_stmt(self, st: A.Stmt, scope: Scope, ret_type: Type = Void):
         if isinstance(st, A.VarDecl):
-            var_type = type_from_name(# Indexing: any expression can be the base (e.g. chained arr[i][j])# Indexing: any expression can be the base (e.g. chained arr[i][j])st.type_name) if st.type_name else None
+            # FIXED: clean call to type_from_name
+            var_type = type_from_name(st.type_name) if st.type_name else None
             if st.init is not None:
                 init_t = self._analyze_expr(st.init, scope)
                 if var_type is None:
@@ -138,8 +134,7 @@ class SemanticAnalyzer:
             if st.value is not None:
                 val_t = self._analyze_expr(st.value, scope)
                 if val_t != ret_type:
-                    raise SemanticError
-                        (f"Return type mismatch: expected {ret_type}, got {val_t}")
+                    raise SemanticError(f"Return type mismatch: expected {ret_type}, got {val_t}")  # FIXED: single line
         elif isinstance(st, A.If):
             self._analyze_expr(st.cond, scope)
             then_scope = Scope(scope)
@@ -162,7 +157,6 @@ class SemanticAnalyzer:
 
     def _analyze_expr(self, e: A.Expr, scope: Scope) -> Type:
         if isinstance(e, A.Literal):
-            # Order matters: in Python, bool is a subclass of int, so check bool first.
             if isinstance(e.value, bool):
                 self.ctx.set_type(e, Bool)
                 return Bool
@@ -197,6 +191,11 @@ class SemanticAnalyzer:
                     self.ctx.set_type(e, Int)
                     return Int
                 raise SemanticError("Arithmetic operators require int operands")
+            if e.op == '%':
+                if lt == Int and rt == Int:
+                    self.ctx.set_type(e, Int)
+                    return Int
+                raise SemanticError("Modulo operator requires int operands")
             if e.op in ('==', '!=', '<', '<=', '>', '>='):
                 if lt == rt:
                     self.ctx.set_type(e, Bool)
@@ -218,16 +217,13 @@ class SemanticAnalyzer:
             self.ctx.set_type(e, Int)
             return Int
         if isinstance(e, A.AddressOf):
-            # For now, allow taking the address of local variables and array elements only.
             if isinstance(e.target, A.Identifier):
                 sym = scope.resolve(e.target.name)
                 if sym is None:
                     raise SemanticError(f"Undeclared variable '{e.target.name}'")
-                # Any object with a stack slot can have its address taken; treat as ptr.
                 self.ctx.set_type(e, Ptr)
                 return Ptr
             if isinstance(e.target, A.Index):
-                # Address of array element; also ptr.
                 arr_t = self._analyze_expr(e.target.array, scope)
                 if not is_array_type(arr_t):
                     raise SemanticError("Can only take address of int[N] array elements")
@@ -238,7 +234,7 @@ class SemanticAnalyzer:
                 return Ptr
             raise SemanticError("Can only take address of variables or array elements")
         if isinstance(e, A.Call):
-            # Special handling for array helpers whose first argument is an array.
+            # Special handling for array helpers
             if e.callee == "array_push":
                 if len(e.args) != 3:
                     raise SemanticError("array_push expects 3 arguments")
@@ -262,7 +258,6 @@ class SemanticAnalyzer:
                 len_t = self._analyze_expr(e.args[1], scope)
                 if len_t != Int:
                     raise SemanticError("array_pop length must be int")
-                # returns popped int
                 self.ctx.set_type(e, Int)
                 return Int
             if e.callee not in self.ctx.functions:
