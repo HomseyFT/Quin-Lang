@@ -1,3 +1,3 @@
 fn main(): void {
-    println(78);
+    println(5%2);
 }

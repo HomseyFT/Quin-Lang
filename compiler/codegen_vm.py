@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 from . import ast as A
 from .bytecode import OpCode, Instruction, Bytecode
 from .sema import Context
-from .types import Int, Str, Bool
+from .compiler_types import Int, Str, Bool
 
 
 @dataclass
@@ -367,6 +367,8 @@ class CodeGenVM:
                 self.code.append(Instruction(OpCode.MUL))
             elif e.op == '/':
                 self.code.append(Instruction(OpCode.DIV))
+            elif e.op == '%':
+                self.code.append(Instruction(OpCode.MOD))
             elif e.op == '==':
                 self.code.append(Instruction(OpCode.CMP_EQ))
             elif e.op == '!=':

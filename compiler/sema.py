@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 from . import ast as A
-from .types import Type, Int, Str, Void, Bool, Ptr, type_from_name, is_array_type
+from .compiler_types import Type, Int, Str, Void, Bool, Ptr, type_from_name, is_array_type
 from .builtins import get_builtins, BuiltinSig
 
 class SemanticError(Exception):

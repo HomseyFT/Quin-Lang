@@ -72,6 +72,12 @@ class QuinVM:
                 # signed division
                 self.stack.append(int(a) // int(b))
 
+            elif op is OpCode.MOD:
+                b = self.stack.pop(); a = self.stack.pop()
+                if b == 0:
+                    raise RuntimeError("Modulo by zero")
+                self.stack.append(int(a) % int(b))
+
             elif op is OpCode.NEG:
                 a = self.stack.pop()
                 self.stack.append((-int(a)) & 0xFFFF)
