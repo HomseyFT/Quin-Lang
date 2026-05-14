@@ -197,6 +197,11 @@ class QuinVM:
                         raise RuntimeError(f"MEMSET_LOCALS out of range: dst={dst}, count={count}, num_locals={len(self.locals)}")
                     self.locals[di] = value
 
+            elif op is OpCode.POP:
+                if not self.stack:
+                    raise RuntimeError(f"Stack is underflowing on POP at pc={self.pc -1}")
+                self.stack.pop()
+
             elif op is OpCode.PRINT_INT:
                 v = self.stack.pop()
                 print(int(v), end="")

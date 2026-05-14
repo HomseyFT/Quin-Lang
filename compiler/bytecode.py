@@ -48,6 +48,9 @@ class OpCode(Enum):
     MEMCPY_LOCALS = auto()     # pop count, src, dst; copy locals
     MEMSET_LOCALS = auto()     # pop count, value, dst; fill locals
 
+    # Stack management
+    POP = auto()
+
     # Builtin-style I/O
     PRINT_INT = auto()
     PRINT_STR = auto()

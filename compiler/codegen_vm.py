@@ -153,8 +153,7 @@ class CodeGenVM:
             self.code.append(Instruction(OpCode.RET))
         elif isinstance(st, A.ExprStmt):
             self._emit_expr(st.expr, layout, ctx)
-            # discard result
-            # (VM just leaves it on stack; could add a POP if desired)
+            self.code.append(Instruction(OpCode.POP))
         elif isinstance(st, A.If):
             self._emit_if(st, layout, ctx)
         elif isinstance(st, A.While):
