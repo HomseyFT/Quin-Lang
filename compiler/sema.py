@@ -80,12 +80,11 @@ class SemanticAnalyzer:
         scope = Scope()
         for p, t in zip(fn.params, sig.params):
             scope.define(Symbol(p.name, t))
-        saw_return = False
+        # Check if function body always returns
+        always_returns = any(self._always_returns(st, scope, sig.ret) for st in fn.body)
         for st in fn.body:
             self._analyze_stmt(st, scope, sig.ret)   # FIXED: removed space and dot
-            if isinstance(st, A.Return):
-                saw_return = True
-        if sig.ret != Void and not saw_return:
+        if sig.ret != Void and not always_returns:
             raise SemanticError(f"Function '{fn.name}' missing return statement")
 
     def _analyze_stmt(self, st: A.Stmt, scope: Scope, ret_type: Type = Void):
@@ -154,6 +153,31 @@ class SemanticAnalyzer:
         else:
             # Ignore blocks etc.
             pass
+
+    def _always_returns(self, st: A.Stmt, scope: Scope, ret_type: Type) -> bool:
+        """Return True if statement always returns (i.e., execution cannot continue past it)."""
+        if isinstance(st, A.Return):
+            return True
+        if isinstance(st, A.Block):
+            # A block always returns if any statement in it always returns
+            for s in st.body:
+                if self._always_returns(s, scope, ret_type):
+                    return True
+            return False
+        if isinstance(st, A.If):
+            # If with both branches: returns only if both branches always return
+            then_always = any(self._always_returns(s, scope, ret_type) for s in st.then_block)
+            if st.else_block:
+                else_always = any(self._always_returns(s, scope, ret_type) for s in st.else_block)
+                return then_always and else_always
+            else:
+                # No else branch: not guaranteed
+                return False
+        if isinstance(st, A.While):
+            # While loop may not execute, so never guaranteed
+            return False
+        # All other statements (VarDecl, Assign, ExprStmt, Print, PrintLn, etc.) do not guarantee return
+        return False
 
     def _analyze_expr(self, e: A.Expr, scope: Scope) -> Type:
         if isinstance(e, A.Literal):
