@@ -135,7 +135,9 @@ class SemanticAnalyzer:
                 if val_t != ret_type:
                     raise SemanticError(f"Return type mismatch: expected {ret_type}, got {val_t}")  # FIXED: single line
         elif isinstance(st, A.If):
-            self._analyze_expr(st.cond, scope)
+            cond_t = self._analyze_expr(st.cond, scope)
+            if cond_t != Bool:
+                raise SemanticError("If condition must be bool")
             then_scope = Scope(scope)
             for s in st.then_block:
                 self._analyze_stmt(s, then_scope, ret_type)
@@ -144,7 +146,9 @@ class SemanticAnalyzer:
                 for s in st.else_block:
                     self._analyze_stmt(s, else_scope, ret_type)
         elif isinstance(st, A.While):
-            self._analyze_expr(st.cond, scope)
+            cond_t = self._analyze_expr(st.cond, scope)
+            if cond_t != Bool:
+                raise SemanticError("While condition must be bool")
             body_scope = Scope(scope)
             for s in st.body:
                 self._analyze_stmt(s, body_scope, ret_type)
