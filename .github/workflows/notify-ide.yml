@@ -16,6 +16,6 @@ jobs:
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.IDE_SYNC }}
-          repository: ${{ github.repository_owner }}/QuinLang-IDE
+          repository: ${{ github.repository_owner }}/QuinLang-Text-Editor
           event-type: compiler-updated
           client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
