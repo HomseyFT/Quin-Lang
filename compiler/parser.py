@@ -288,15 +288,20 @@ class Parser:
 
     def _primary(self) -> A.Expr:
         if self._match(TokenType.FALSE):
-            return A.Literal(False)
+            tok = self._previous()
+            return A.Literal(False, line=tok.line, col=tok.col)
         if self._match(TokenType.TRUE):
-            return A.Literal(True)
+            tok = self._previous()
+            return A.Literal(True, line=tok.line, col=tok.col)
         if self._match(TokenType.NUMBER):
-            return A.Literal(self._previous().literal)
+            tok = self._previous()
+            return A.Literal(tok.literal, line=tok.line, col=tok.col)
         if self._match(TokenType.STRING):
-            return A.Literal(self._previous().literal)
+            tok = self._previous()
+            return A.Literal(tok.literal, line=tok.line, col=tok.col)
         if self._match(TokenType.IDENTIFIER):
-            return A.Identifier(self._previous().lexeme)
+            tok = self._previous()
+            return A.Identifier(tok.lexeme, line=tok.line, col=tok.col)
         if self._match(TokenType.LEFT_PAREN):
             expr = self._expression()
             self._consume(TokenType.RIGHT_PAREN, "Expected ')' after expression")
