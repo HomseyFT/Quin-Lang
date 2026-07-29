@@ -6,54 +6,18 @@ global main
 main:
 push bp
 mov bp, sp
-sub sp, 8
-xor ax, ax
-mov [bp-6], ax
-xor ax, ax
-mov [bp-8], ax
-mov ax, 7
-push ax
-mov ax, 0
-mov si, ax
-shl si, 1
-pop ax
-mov [bp+si-6], ax
-mov ax, 8
-push ax
-mov ax, 1
-mov si, ax
-shl si, 1
-pop ax
-mov [bp+si-6], ax
-mov ax, 9
+mov ax, 5
 push ax
 mov ax, 2
-mov si, ax
-shl si, 1
-pop ax
-mov [bp+si-6], ax
-mov ax, 0
-mov si, ax
-shl si, 1
-mov ax, [bp+si-6]
+pop bx
 call rt_print_num16
 call rt_print_newline
-mov ax, 1
-mov si, ax
-shl si, 1
-mov ax, [bp+si-6]
+mov ax, 10
+push ax
+mov ax, 3
+pop bx
 call rt_print_num16
 call rt_print_newline
-mov ax, 2
-mov si, ax
-shl si, 1
-mov ax, [bp+si-6]
-call rt_print_num16
-call rt_print_newline
-mov ax, 0
-mov sp, bp
-pop bp
-ret
 mov sp, bp
 pop bp
 ret
