@@ -1,12 +1,12 @@
 # QuinLang Syntax and Built-in Functions
 
-The reference for QuinLang's surface syntax and built-ins. Behavior described here is the **QuinVM backend** (`python3 -m compiler.driver_vm`), which is the supported one; where the 8086 backend differs, it is called out. See [README.md](README.md) for an overview and the backend comparison table.
+The reference for QuinLang's surface syntax and built-ins. Programs are compiled to QuinVM bytecode and run with `python3 -m compiler.driver_vm`. See [README.md](README.md) for an overview of the pipeline.
 
 ## Lexical structure
 
 - **Comments**: `// to end of line`. There are no block comments.
 - **Identifiers**: start with a letter or `_`, then letters, digits, or `_`.
-- **Keywords**: `fn let return if else while true false int str void ptr print println asm vm_asm include`. These cannot be used as identifiers.
+- **Keywords**: `fn let return if else while true false int str void ptr heapptr print println vm_asm include`. These cannot be used as identifiers.
 - **Integer literals**: decimal (`123`) or hexadecimal (`0xFF`, `0XFF`). A literal must fit in 16 bits (`0..65535`); larger values are a lex error. There are no negative literals — `-1` is the unary `-` operator applied to `1`.
 - **String literals**: `"..."`, delimited by double quotes, may span lines. There are **no escape sequences**: `\n` inside a string literal is a backslash followed by `n`.
 - **Whitespace** is insignificant.
@@ -67,12 +67,15 @@ fn main(): void { }
 | --- | --- |
 | `int` | 16-bit **signed** integer. Wraps on overflow; `/` truncates toward zero. |
 | `bool` | `true` / `false`. Not implicitly convertible to or from `int`. |
-| `str` | String literal; on the VM an interned id into a string table. |
-| `ptr` | Untyped address. See [Pointers](#pointers-and-address-of). |
+| `str` | String literal, held as an interned id into a string table. |
+| `ptr` | An address in the current frame, produced by `&`. See [Pointers](#pointers-and-address-of). |
+| `heapptr` | An address in the heap, produced by `alloc`. See [Heap](#heap-alloc--heap_load--heap_store). |
 | `void` | No value. Only valid as a return type. |
 | `int[N]` | Fixed-size array of `N` ints in the current frame. `N` must be a positive integer literal. |
 
 `bool` is a distinct type, not an alias for `0`/`1`: conditions must be `bool`, `true + 1` is a type error, and `if (1)` is rejected with `If condition must be bool`.
+
+`ptr` and `heapptr` are both 16-bit addresses, but they index different memory and are **not** interchangeable. Assigning one to the other, comparing them, or passing one to an intrinsic expecting the other is a type error.
 
 ### Array restrictions
 
@@ -134,9 +137,9 @@ println(true);          // prints: true
 ```
 
 - `print` and `println` are **statements with call-like syntax**, not functions: they are keywords, take exactly one argument, and cannot be used as values.
-- The argument must be `int`, `str`, or `bool`. `ptr`, `void`, and `int[N]` are rejected.
+- The argument must be `int`, `str`, or `bool`. `ptr`, `heapptr`, `void`, and `int[N]` are rejected.
 - `bool` prints as `true` / `false`; `println` adds a newline.
-- Strings print verbatim on the VM. The `$` terminator seen in older examples is an 8086/DOS convention and prints as a literal `$` under the VM.
+- Strings print verbatim. A `$` in a string is an ordinary character; it used to terminate DOS strings back when QuinLang targeted 8086, and carries no meaning now.
 
 ### Return
 
@@ -171,21 +174,7 @@ while (condition) {
 
 `condition` must have type `bool`. There is no `for`, `break`, or `continue`.
 
-### Inline assembly (8086 backend only)
-
-```quin
-asm "mov ax, 1";
-
-asm "mov ax, 1
-add ax, 2";
-```
-
-- Splices the string into the generated `.asm` as raw lines.
-- For more than one instruction, the string must contain **real newlines**, as above. Since string literals have no escape sequences, `asm "mov ax, 1\nadd ax, 2";` emits the single broken line `mov ax, 1\nadd ax, 2`.
-- Only the 8086 backend (`compiler.driver`) emits it; the VM backend parses `asm` and ignores it.
-- You are responsible for the calling convention, stack discipline, and callee-saved registers.
-
-### `vm_asm` (VM backend only)
+### `vm_asm`
 
 ```quin
 fn main(): int {
@@ -201,7 +190,7 @@ fn main(): int {
 }
 ```
 
-`vm_asm { ... }` lowers directly to VM bytecode. Each instruction is a line ending in `;`. The 8086 backend rejects `vm_asm` blocks.
+`vm_asm { ... }` lowers directly to VM bytecode. Each instruction is a line ending in `;`.
 
 The block is emitted verbatim with no verification that it leaves the operand stack balanced. If it doesn't, the VM reports `Unbalanced operand stack at RET` when the enclosing function returns.
 
@@ -294,11 +283,11 @@ p = &x;        // address of a variable
 p = &a[1];     // address of an array element
 ```
 
-On the VM a `ptr` is an **index into the current frame's locals**, not a machine address. Consequences:
+A `ptr` is an **index into the current frame's locals**, not a machine address. Consequences:
 
 - Pointers are only meaningful inside the frame that created them. Returning `&x` and dereferencing it in the caller reads an unrelated slot, or faults if the caller's frame is smaller.
-- `memcpy` / `memset` counts are in **slots (16-bit words)**, not bytes. (The 8086 backend counts bytes.)
-- Heap addresses from `alloc` are byte offsets into a *separate* address space, but carry the same `ptr` type. Mixing the two — `load16` on an `alloc`ed pointer, or `heap_load` on `&x` — compiles and silently reads the wrong memory.
+- `memcpy` / `memset` counts are in **slots (16-bit words)**, not bytes.
+- Heap addresses are a *separate* address space with its own type, `heapptr`. Mixing the two is a compile error, not a silent misread: `load16(alloc(2))` and `heap_load(&x)` are both rejected.
 
 ### Function calls
 
@@ -322,9 +311,9 @@ Always available and lowered directly by the compiler; they cannot be shadowed b
 | `store16(p: ptr, value: int): void` | Write `value` at `p`. |
 | `memcpy(dst: ptr, src: ptr, count: int): void` | Copy `count` slots. |
 | `memset(dst: ptr, value: int, count: int): void` | Fill `count` slots with `value`. |
-| `alloc(size: int): ptr` | Bump-allocate `size` bytes on the heap. |
-| `heap_load(p: ptr): int` | Read the word at heap address `p`. |
-| `heap_store(p: ptr, value: int): void` | Write `value` at heap address `p`. |
+| `alloc(size: int): heapptr` | Bump-allocate `size` bytes on the heap. |
+| `heap_load(p: heapptr): int` | Read the word at heap address `p`. |
+| `heap_store(p: heapptr, value: int): void` | Write `value` at heap address `p`. |
 | `ct_eq(a: int, b: int): bool` | Equality, intended to be branchless. |
 | `ct_select(mask: int, x: int, y: int): int` | `x` when `mask` is 1, else `y`. |
 
@@ -362,7 +351,7 @@ These operate on frame slots on the VM. Use `heap_load` / `heap_store` for heap 
 
 ### `memcpy` / `memset`
 
-`count` is in slots on the VM and in bytes on the 8086 backend:
+`count` is in slots (16-bit words), not bytes:
 
 ```quin
 let src: int[3];
@@ -384,7 +373,7 @@ Overlapping `memcpy` ranges are handled: the copy runs back to front when the de
 ### Heap: `alloc` / `heap_load` / `heap_store`
 
 ```quin
-let p: ptr;
+let p: heapptr;
 
 p = alloc(8);            // 8 bytes; sizes are rounded up to a multiple of 2
 heap_store(p, 1234);
@@ -393,12 +382,12 @@ println(heap_load(p));   // 1234
 
 - The heap is 64 KiB and managed by a bump pointer. There is no `free` and no reuse; exhausting it is a runtime error (`Heap out of memory`).
 - Addresses are byte offsets; a word occupies two of them, so consecutive words are at `p`, `p + 2`, `p + 4`, ...
-- Word accesses are bounds-checked against the heap, but nothing checks that an address came from `alloc` or belongs to the allocation you think it does.
-- The 8086 backend does not implement these — it emits a call to a symbol that does not exist.
+- Word accesses are bounds-checked against the heap, but nothing checks that an address belongs to the allocation you think it does.
+- A `heapptr` cannot be passed to `load16` / `store16` / `memcpy` / `memset`, and a `ptr` cannot be passed to `heap_load` / `heap_store`. The type checker rejects both.
 
 ### `ct_eq` / `ct_select`
 
-Constant-time-*style* helpers. The 8086 backend lowers them to branchless sequences; the VM preserves the semantics but makes no timing guarantee.
+Constant-time-*style* helpers. They preserve the intended semantics, but the VM makes no timing guarantee — `ct_eq` lowers to an ordinary comparison. The names describe intent, inherited from the 8086 backend where they lowered to branchless sequences.
 
 ```quin
 let x: int = 1234;
@@ -419,10 +408,9 @@ println(ct_select(0, a, b));   // 20
 ## Notes and limitations
 
 - No bounds checking on array indexing or `array_push` / `array_pop`.
-- `ptr` is untyped and overloaded: frame-slot pointers and heap addresses share a type but not an address space.
+- Pointers are untyped within their address space: a `ptr` is just a slot index, and nothing checks what kind of data lives there.
 - Pointers do not outlive the frame they point into.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
 - Comparing `str` values compares interned ids, so `==` and `!=` work as expected but `<` / `>` are meaningless (`"b" < "a"` is `true`).
 - No `for`, `break`, `continue`, block statements, structs, or user-defined types.
 - No escape sequences in string literals.
-- The 8086 backend lags the language; see the table in [README.md](README.md#backend-status).

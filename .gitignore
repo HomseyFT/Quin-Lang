@@ -8,13 +8,6 @@ __pycache__/
 .eggs/
 *.egg
 
-# Build outputs
-build/
-*.asm
-*.com
-*.o
-*.obj
-
 # IDE / Editor
 .vscode/
 .idea/
@@ -28,12 +21,6 @@ build/
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# Test outputs
-tests/**/build/
-tests/**/*.asm
-tests/**/*.com
-tests/include/*.ql
 
 # Virtual environments
 venv/
