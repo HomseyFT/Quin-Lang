@@ -32,6 +32,7 @@ class OpCode(Enum):
 
     # Logical
     NOT = auto()
+    BITNOT = auto()
 
     # Control flow
     JMP = auto()           # operand: target pc

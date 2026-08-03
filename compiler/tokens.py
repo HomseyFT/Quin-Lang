@@ -23,6 +23,7 @@ class TokenType(Enum):
 
     # One or two character tokens
     BANG = auto()
+    TILDE = auto()
     BANG_EQUAL = auto()
     EQUAL_EQUAL = auto()
     GREATER = auto()

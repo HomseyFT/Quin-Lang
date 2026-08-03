@@ -93,6 +93,8 @@ class Lexer:
             self._add_token(TokenType.PERCENT); return
         if c == '^':
             self._add_token(TokenType.CARET); return
+        if c == '~':
+            self._add_token(TokenType.TILDE); return
         if c == '|':
             if self._match('|'):
                 self._add_token(TokenType.OR_OR); return

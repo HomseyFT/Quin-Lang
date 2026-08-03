@@ -402,6 +402,8 @@ class CodeGenVM:
                 self.code.append(Instruction(OpCode.NEG))
             elif e.op == '!':
                 self.code.append(Instruction(OpCode.NOT))
+            elif e.op == '~':
+                self.code.append(Instruction(OpCode.BITNOT))
             else:
                 raise CodegenError(f"[{e.line}:{e.col}] Unknown unary operator '{e.op}'")
         elif isinstance(e, A.Binary):

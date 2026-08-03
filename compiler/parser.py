@@ -273,7 +273,7 @@ class Parser:
             tok = self._previous()
             target = self._unary()
             return A.AddressOf(target, line=tok.line, col=tok.col)
-        if self._match(TokenType.BANG, TokenType.MINUS):
+        if self._match(TokenType.BANG, TokenType.MINUS, TokenType.TILDE):
             tok = self._previous()
             op = tok.lexeme
             right = self._unary()

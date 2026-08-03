@@ -326,6 +326,9 @@ class SemanticAnalyzer:
             if e.op == '!' and t == Bool:
                 self.ctx.set_type(e, Bool)
                 return Bool
+            if e.op == '~' and t == Int:
+                self.ctx.set_type(e, Int)
+                return Int
             raise SemanticError(f"Invalid unary op {e.op} for type {t}", e.line, e.col)
         if isinstance(e, A.Binary):
             lt = self._analyze_expr(e.left, scope)

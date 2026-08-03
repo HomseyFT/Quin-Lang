@@ -222,6 +222,9 @@ class QuinVM:
             elif op is OpCode.NOT:
                 self.stack.append(0 if self._pop() else 1)
 
+            elif op is OpCode.BITNOT:
+                self.stack.append((~self._pop()) & WORD_MASK)
+
             elif op is OpCode.JMP:
                 self.pc = int(arg)
 
