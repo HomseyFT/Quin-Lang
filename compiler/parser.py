@@ -196,8 +196,17 @@ class Parser:
         return expr
 
     def _and(self) -> A.Expr:
-        expr = self._bitxor()
+        expr = self._bitor()
         while self._match(TokenType.AND_AND):
+            op_tok = self._previous()
+            op = op_tok.lexeme
+            right = self._bitor()
+            expr = A.Binary(expr, op, right, line=op_tok.line, col=op_tok.col)
+        return expr
+
+    def _bitor(self) -> A.Expr:
+        expr = self._bitxor()
+        while self._match(TokenType.PIPE):
             op_tok = self._previous()
             op = op_tok.lexeme
             right = self._bitxor()
@@ -223,8 +232,17 @@ class Parser:
         return expr
 
     def _comparison(self) -> A.Expr:
-        expr = self._term()
+        expr = self._shift()
         while self._match(TokenType.GREATER, TokenType.GREATER_EQUAL, TokenType.LESS, TokenType.LESS_EQUAL):
+            op_tok = self._previous()
+            op = op_tok.lexeme
+            right = self._shift()
+            expr = A.Binary(expr, op, right, line=op_tok.line, col=op_tok.col)
+        return expr
+
+    def _shift(self) -> A.Expr:
+        expr = self._term()
+        while self._match(TokenType.SHL, TokenType.SHR):
             op_tok = self._previous()
             op = op_tok.lexeme
             right = self._term()

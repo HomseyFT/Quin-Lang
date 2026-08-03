@@ -96,6 +96,7 @@ class Lexer:
         if c == '|':
             if self._match('|'):
                 self._add_token(TokenType.OR_OR); return
+            self._add_token(TokenType.PIPE); return
         if c == ':':
             self._add_token(TokenType.COLON); return
         if c == '&':
@@ -115,8 +116,12 @@ class Lexer:
         if c == '=':
             self._add_token(TokenType.EQUAL_EQUAL if self._match('=') else TokenType.EQUAL); return
         if c == '<':
+            if self._match('<'):
+                self._add_token(TokenType.SHL); return
             self._add_token(TokenType.LESS_EQUAL if self._match('=') else TokenType.LESS); return
         if c == '>':
+            if self._match('>'):
+                self._add_token(TokenType.SHR); return
             self._add_token(TokenType.GREATER_EQUAL if self._match('=') else TokenType.GREATER); return
         if c == '"':
             self._string(); return

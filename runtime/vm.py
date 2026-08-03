@@ -177,6 +177,25 @@ class QuinVM:
                 a = self._pop()
                 self.stack.append((a ^ b) & WORD_MASK)
 
+            elif op is OpCode.OR:
+                b = self._pop()
+                a = self._pop()
+                self.stack.append((a | b) & WORD_MASK)
+
+            elif op is OpCode.SHL:
+                count = to_signed(self._pop())
+                value = self._pop()
+                if count < 0 or count > 15:
+                    raise VMError(f"Shift count out of range for SHL: {count}")
+                self.stack.append((value << count) & WORD_MASK)
+
+            elif op is OpCode.SHR:
+                count = to_signed(self._pop())
+                value = to_signed(self._pop())
+                if count < 0 or count > 15:
+                    raise VMError(f"Shift count out of range for SHR: {count}")
+                self.stack.append((value >> count) & WORD_MASK)
+
             elif op is OpCode.NEG:
                 self.stack.append((-self._pop()) & WORD_MASK)
 
