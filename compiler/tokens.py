@@ -32,6 +32,7 @@ class TokenType(Enum):
     AND_AND = auto()
     OR_OR = auto()
     PERCENT = auto()  # New token type for modulo operator
+    CARET = auto()    # New token type for bitwise XOR operator
 
     # Literals
     IDENTIFIER = auto()

@@ -459,6 +459,7 @@ class CodeGenVM:
             '*': OpCode.MUL,
             '/': OpCode.DIV,
             '%': OpCode.MOD,
+            '^': OpCode.XOR,
             '==': OpCode.CMP_EQ,
             '!=': OpCode.CMP_NE,
             '<': OpCode.CMP_LT,

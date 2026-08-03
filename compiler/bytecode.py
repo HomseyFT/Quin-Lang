@@ -16,6 +16,7 @@ class OpCode(Enum):
     MUL = auto()
     DIV = auto()
     MOD = auto()
+    XOR = auto()
     NEG = auto()
 
     # Comparisons (push 0/1)

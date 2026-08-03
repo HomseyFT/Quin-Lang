@@ -340,6 +340,11 @@ class SemanticAnalyzer:
                     self.ctx.set_type(e, Int)
                     return Int
                 raise SemanticError("Modulo operator requires int operands", e.line, e.col)
+            if e.op == '^':
+                if lt == Int and rt == Int:
+                    self.ctx.set_type(e, Int)
+                    return Int
+                raise SemanticError("Bitwise XOR operator requires int operands", e.line, e.col)
             if e.op in ('==', '!=', '<', '<=', '>', '>='):
                 if lt == rt:
                     self.ctx.set_type(e, Bool)

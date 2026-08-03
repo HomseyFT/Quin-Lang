@@ -196,8 +196,17 @@ class Parser:
         return expr
 
     def _and(self) -> A.Expr:
-        expr = self._equality()
+        expr = self._bitxor()
         while self._match(TokenType.AND_AND):
+            op_tok = self._previous()
+            op = op_tok.lexeme
+            right = self._bitxor()
+            expr = A.Binary(expr, op, right, line=op_tok.line, col=op_tok.col)
+        return expr
+
+    def _bitxor(self) -> A.Expr:
+        expr = self._equality()
+        while self._match(TokenType.CARET):
             op_tok = self._previous()
             op = op_tok.lexeme
             right = self._equality()

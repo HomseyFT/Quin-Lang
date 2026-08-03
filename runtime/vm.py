@@ -172,6 +172,11 @@ class QuinVM:
                     raise VMError("Modulo by zero")
                 self.stack.append((a - trunc_div(a, b) * b) & WORD_MASK)
 
+            elif op is OpCode.XOR:
+                b = self._pop()
+                a = self._pop()
+                self.stack.append((a ^ b) & WORD_MASK)
+
             elif op is OpCode.NEG:
                 self.stack.append((-self._pop()) & WORD_MASK)
 
