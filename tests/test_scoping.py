@@ -187,7 +187,7 @@ class TestFrameLayout(QuinTestCase):
                 let p: ptr;
                 x = x + f(x);
                 a[x] = x;
-                p = &a[0];
+                p = @a[0];
                 return x;
             }
             """

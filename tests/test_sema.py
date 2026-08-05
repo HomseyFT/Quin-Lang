@@ -260,7 +260,7 @@ class TestPrinting(QuinTestCase):
 
     def test_ptr_is_not_printable(self):
         self.assertCompileError(
-            "fn main(): int { let x: int; let p: ptr; p = &x; println(p); return 0; }",
+            "fn main(): int { let x: int; let p: ptr; p = @x; println(p); return 0; }",
             "print/println expect int, str, or bool",
         )
 

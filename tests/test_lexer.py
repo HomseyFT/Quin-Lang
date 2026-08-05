@@ -95,6 +95,8 @@ class TestOperatorsAndKeywords(QuinTestCase):
 
     def test_amp_is_address_of_but_amp_amp_is_and(self):
         self.assertEqual(kinds("&"), [TokenType.AMP, TokenType.EOF])
+        self.assertEqual(kinds("@"), [TokenType.AT, TokenType.EOF])
+        self.assertEqual(kinds("@x"), [TokenType.AT, TokenType.IDENTIFIER, TokenType.EOF])
         self.assertEqual(kinds("&&"), [TokenType.AND_AND, TokenType.EOF])
 
     def test_keywords_are_not_identifiers(self):
@@ -118,7 +120,7 @@ class TestOperatorsAndKeywords(QuinTestCase):
 
     def test_unexpected_character(self):
         with self.assertRaises(LexError) as cm:
-            Lexer("@").tokenize()
+            Lexer("$").tokenize()
         self.assertIn("Unexpected character", str(cm.exception))
 
 
@@ -129,7 +131,7 @@ class TestSourceLocations(QuinTestCase):
 
     def test_error_carries_location(self):
         with self.assertRaises(LexError) as cm:
-            Lexer("fn main() {\n  @\n}").tokenize()
+            Lexer("fn main() {\n  $\n}").tokenize()
         self.assertEqual(cm.exception.line, 2)
 
 

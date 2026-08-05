@@ -1,6 +1,6 @@
 """Pointers, memory intrinsics, and the two address spaces.
 
-`ptr` (a frame slot index, from `&`) and `heapptr` (a byte offset, from
+`ptr` (a frame slot index, from `@`) and `heapptr` (a byte offset, from
 `alloc`) are distinct types. Mixing them used to typecheck and silently read
 the wrong memory; these tests pin that it no longer does.
 """
@@ -17,7 +17,7 @@ class TestFramePointers(QuinTestCase):
             fn main(): int {
                 let x: int;
                 let p: ptr;
-                p = &x;
+                p = @x;
                 store16(p, 4321);
                 println(x);
                 return 0;
@@ -32,7 +32,7 @@ class TestFramePointers(QuinTestCase):
             fn main(): int {
                 let x: int = 1234;
                 let p: ptr;
-                p = &x;
+                p = @x;
                 println(load16(p));
                 return 0;
             }
@@ -47,7 +47,7 @@ class TestFramePointers(QuinTestCase):
                 let a: int[3];
                 let p: ptr;
                 a[1] = 55;
-                p = &a[1];
+                p = @a[1];
                 println(load16(p));
                 return 0;
             }
@@ -63,7 +63,7 @@ class TestFramePointers(QuinTestCase):
                 let i: int = 2;
                 let p: ptr;
                 a[2] = 9;
-                p = &a[i];
+                p = @a[i];
                 println(load16(p));
                 return 0;
             }
@@ -73,7 +73,7 @@ class TestFramePointers(QuinTestCase):
 
     def test_cannot_take_the_address_of_a_literal(self):
         self.assertCompileError(
-            "fn main(): int { let p: ptr; p = &1; return 0; }",
+            "fn main(): int { let p: ptr; p = @1; return 0; }",
             "Can only take address of variables or array elements",
         )
 
@@ -89,7 +89,7 @@ class TestMemoryIntrinsics(QuinTestCase):
                 let dst: int[3];
                 let guard: int = 999;
                 src[0] = 7; src[1] = 8; src[2] = 9;
-                memcpy(&dst[0], &src[0], 3);
+                memcpy(@dst[0], @src[0], 3);
                 println(dst[0]); println(dst[1]); println(dst[2]);
                 println(guard);
                 return 0;
@@ -105,7 +105,7 @@ class TestMemoryIntrinsics(QuinTestCase):
                 let buf: int[3];
                 let guard: int = 42;
                 buf[0] = 1; buf[1] = 2; buf[2] = 3;
-                memset(&buf[0], 0, 3);
+                memset(@buf[0], 0, 3);
                 println(buf[0]); println(buf[2]); println(guard);
                 return 0;
             }
@@ -118,7 +118,7 @@ class TestMemoryIntrinsics(QuinTestCase):
             """
             fn main(): int {
                 let buf: int[2];
-                memset(&buf[0], 513, 2);
+                memset(@buf[0], 513, 2);
                 println(buf[0]);
                 return 0;
             }
@@ -134,7 +134,7 @@ class TestMemoryIntrinsics(QuinTestCase):
             fn main(): int {
                 let a: int[4];
                 a[0] = 1; a[1] = 2; a[2] = 3;
-                memcpy(&a[1], &a[0], 3);
+                memcpy(@a[1], @a[0], 3);
                 println(a[0]); println(a[1]); println(a[2]); println(a[3]);
                 return 0;
             }
@@ -148,7 +148,7 @@ class TestMemoryIntrinsics(QuinTestCase):
             fn main(): int {
                 let a: int[2];
                 let b: int[2];
-                memcpy(&b[0], &a[0], 0 - 1);
+                memcpy(@b[0], @a[0], 0 - 1);
                 return 0;
             }
             """,
@@ -240,7 +240,7 @@ class TestAddressSpacesAreDisjoint(QuinTestCase):
 
     def test_heap_load_rejects_a_frame_pointer(self):
         self.assertCompileError(
-            "fn main(): int { let x: int; let p: ptr; p = &x; println(heap_load(p)); return 0; }",
+            "fn main(): int { let x: int; let p: ptr; p = @x; println(heap_load(p)); return 0; }",
             "expected heapptr, got ptr",
         )
 
@@ -252,7 +252,7 @@ class TestAddressSpacesAreDisjoint(QuinTestCase):
 
     def test_heap_store_rejects_a_frame_pointer(self):
         self.assertCompileError(
-            "fn main(): int { let x: int; let p: ptr; p = &x; heap_store(p, 1); return 0; }",
+            "fn main(): int { let x: int; let p: ptr; p = @x; heap_store(p, 1); return 0; }",
             "expected heapptr, got ptr",
         )
 
@@ -270,7 +270,7 @@ class TestAddressSpacesAreDisjoint(QuinTestCase):
 
     def test_cannot_assign_a_frame_pointer_to_a_heap_pointer(self):
         self.assertCompileError(
-            "fn main(): int { let x: int; let h: heapptr; h = &x; return 0; }",
+            "fn main(): int { let x: int; let h: heapptr; h = @x; return 0; }",
             "Cannot assign ptr to heapptr",
         )
 
@@ -281,7 +281,7 @@ class TestAddressSpacesAreDisjoint(QuinTestCase):
                 let x: int;
                 let p: ptr;
                 let h: heapptr;
-                p = &x;
+                p = @x;
                 h = alloc(2);
                 if (p == h) { println(1); }
                 return 0;
@@ -292,7 +292,7 @@ class TestAddressSpacesAreDisjoint(QuinTestCase):
 
     def test_address_of_still_yields_ptr(self):
         self.assertCompiles(
-            "fn main(): int { let x: int; let p: ptr; p = &x; return 0; }"
+            "fn main(): int { let x: int; let p: ptr; p = @x; return 0; }"
         )
 
 
