@@ -272,12 +272,10 @@ class TestArrayBounds(QuinTestCase):
             "Array index out of bounds",
         )
 
-    def test_taking_an_out_of_range_address_faults(self):
-        # Address-of still validates at runtime; the static check reaches it in
-        # the follow-up that de-duplicates index validation.
-        self.assertRuntimeError(
+    def test_taking_an_out_of_range_address_is_a_compile_error(self):
+        self.assertCompileError(
             "fn main(): int { let a: int[2]; let p: ptr; p = @a[2]; return 0; }",
-            "Array index out of bounds",
+            "out of bounds for length 2",
         )
 
     def test_dynamic_out_of_range_address_faults_at_runtime(self):
