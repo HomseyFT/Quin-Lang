@@ -213,12 +213,21 @@ class Parser:
             expr = A.Binary(expr, op, right, line=op_tok.line, col=op_tok.col)
         return expr
 
-    def _bitxor(self) -> A.Expr:
+    def _bitand(self) -> A.Expr:
         expr = self._equality()
-        while self._match(TokenType.CARET):
+        while self._match(TokenType.AMP):
             op_tok = self._previous()
             op = op_tok.lexeme
             right = self._equality()
+            expr = A.Binary(expr, op, right, line=op_tok.line, col=op_tok.col)
+        return expr
+
+    def _bitxor(self) -> A.Expr:
+        expr = self._bitand()
+        while self._match(TokenType.CARET):
+            op_tok = self._previous()
+            op = op_tok.lexeme
+            right = self._bitand()
             expr = A.Binary(expr, op, right, line=op_tok.line, col=op_tok.col)
         return expr
 

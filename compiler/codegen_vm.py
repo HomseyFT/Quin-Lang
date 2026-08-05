@@ -462,6 +462,7 @@ class CodeGenVM:
             '/': OpCode.DIV,
             '%': OpCode.MOD,
             '^': OpCode.XOR,
+            '&': OpCode.AND,
             '|': OpCode.OR,
             '<<': OpCode.SHL,
             '>>': OpCode.SHR,

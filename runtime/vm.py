@@ -177,6 +177,11 @@ class QuinVM:
                 a = self._pop()
                 self.stack.append((a ^ b) & WORD_MASK)
 
+            elif op is OpCode.AND:
+                b = self._pop()
+                a = self._pop()
+                self.stack.append((a & b) & WORD_MASK)
+
             elif op is OpCode.OR:
                 b = self._pop()
                 a = self._pop()

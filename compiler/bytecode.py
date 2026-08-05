@@ -17,6 +17,7 @@ class OpCode(Enum):
     DIV = auto()
     MOD = auto()
     XOR = auto()
+    AND = auto()
     OR = auto()
     SHL = auto()
     SHR = auto()
