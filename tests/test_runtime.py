@@ -210,10 +210,15 @@ class TestCallingConvention(QuinTestCase):
 
 
 class TestArrayBounds(QuinTestCase):
-    """Indexing is unchecked; the VM only faults when the index leaves the frame."""
+    """Indexing is checked against the array's own length, not the frame's size.
 
-    def test_in_frame_overrun_hits_a_neighbor(self):
-        self.assertPrints(
+    Before BOUNDS_CHECK existed, an index was validated only against the number
+    of locals in the frame, so running off the end of an int[N] quietly landed
+    on whatever variable was declared next.
+    """
+
+    def test_in_frame_overrun_faults(self):
+        self.assertRuntimeError(
             """
             fn main(): int {
                 let a: int[2];
@@ -222,19 +227,47 @@ class TestArrayBounds(QuinTestCase):
                 return 0;
             }
             """,
-            "77",
+            "Array index out of bounds",
+        )
+
+    def test_overrun_cannot_clobber_a_neighbor(self):
+        # The regression this check exists for: a[2] on an int[2] used to write
+        # straight into 'neighbor' and report success.
+        self.assertRuntimeError(
+            """
+            fn main(): int {
+                let a: int[2];
+                let neighbor: int = 77;
+                let i: int = 2;
+                a[i] = 9999;
+                return 0;
+            }
+            """,
+            "Array index out of bounds",
         )
 
     def test_leaving_the_frame_faults(self):
         self.assertRuntimeError(
             "fn main(): int { let a: int[2]; println(a[50]); return 0; }",
-            "Local index out of range",
+            "Array index out of bounds",
         )
 
     def test_negative_index_faults(self):
         self.assertRuntimeError(
             "fn main(): int { let a: int[2]; println(a[0 - 50]); return 0; }",
-            "Local index out of range",
+            "Array index out of bounds",
+        )
+
+    def test_taking_an_out_of_range_address_faults(self):
+        self.assertRuntimeError(
+            "fn main(): int { let a: int[2]; let p: ptr; p = @a[2]; return 0; }",
+            "Array index out of bounds",
+        )
+
+    def test_valid_indices_are_unaffected(self):
+        self.assertPrints(
+            "fn main(): int { let a: int[3]; a[0]=5; a[2]=7; println(a[0]); println(a[2]); return 0; }",
+            "5", "7",
         )
 
 

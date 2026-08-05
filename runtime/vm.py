@@ -275,6 +275,18 @@ class QuinVM:
                 self.pc = frame.return_pc
                 self.stack.append(ret_val)
 
+            elif op is OpCode.BOUNDS_CHECK:
+                # Inspect the index on top of the stack without popping it.
+                if len(self.stack) <= self.frame_base:
+                    raise VMError(f"Operand stack underflow on BOUNDS_CHECK at pc={self.pc - 1}")
+                idx = to_signed(self.stack[-1])
+                length = int(arg)
+                if idx < 0 or idx >= length:
+                    raise VMError(
+                        f"Array index out of bounds at pc={self.pc - 1}: "
+                        f"index={idx}, length={length}"
+                    )
+
             elif op is OpCode.LOAD_LOCAL_IDX:
                 idx = to_signed(self._pop())
                 self.stack.append(self._local(int(arg) + idx))
