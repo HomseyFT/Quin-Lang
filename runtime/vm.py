@@ -6,6 +6,7 @@ from compiler.bytecode import OpCode, Instruction, Bytecode
 WORD_MASK = 0xFFFF
 SIGN_BIT = 0x8000
 HEAP_SIZE = 64 * 1024
+NULL_ADDR = 0
 
 
 class VMError(RuntimeError):
@@ -70,7 +71,9 @@ class QuinVM:
         self.locals: List[int] = []         # current frame locals
         self.frame_base: int = 0            # stack height when current frame started
         self.heap: bytearray = bytearray(HEAP_SIZE)
-        self.heap_ptr: int = 0
+        # Address 0 is reserved for null; the bump allocator starts at 2 so
+        # that a real allocation can never be at address 0.
+        self.heap_ptr: int = NULL_ADDR + 2
 
     def run_main(self) -> int:
         if "main" not in self.func_index:
@@ -356,6 +359,8 @@ class QuinVM:
 
             elif op is OpCode.HEAP_LOAD:
                 addr = to_signed(self._pop())
+                if addr == NULL_ADDR:
+                    raise VMError("Null pointer dereference in HEAP_LOAD")
                 self._check_heap_word(addr, "HEAP_LOAD")
                 # little-endian word
                 self.stack.append((self.heap[addr + 1] << 8) | self.heap[addr])
@@ -363,6 +368,8 @@ class QuinVM:
             elif op is OpCode.HEAP_STORE:
                 value = self._pop()
                 addr = to_signed(self._pop())
+                if addr == NULL_ADDR:
+                    raise VMError("Null pointer dereference in HEAP_STORE")
                 self._check_heap_word(addr, "HEAP_STORE")
                 self.heap[addr] = value & 0xFF
                 self.heap[addr + 1] = (value >> 8) & 0xFF

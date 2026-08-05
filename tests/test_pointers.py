@@ -427,3 +427,58 @@ class TestHeapPointerArithmetic(QuinTestCase):
             "require int operands",
         )
 
+
+class TestNull(QuinTestCase):
+    """'null' is a heapptr-typed keyword literal at the reserved address 0.
+
+    The allocator starts at address 2, so no allocation can collide with it,
+    which is what lets a null dereference be detected rather than quietly
+    reading whatever sits at address 0.
+    """
+
+    def test_assignable_to_heapptr(self):
+        self.assertCompiles("fn main(): int { let h: heapptr; h = null; return 0; }")
+
+    def test_compares_equal_to_itself(self):
+        self.assertPrints(
+            "fn main(): int { let h: heapptr; h = null; if (h == null) { println(1); } return 0; }",
+            "1",
+        )
+
+    def test_alloc_never_returns_null(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let h: heapptr;
+                h = alloc(2);
+                if (h == null) { println(0); } else { println(1); }
+                return 0;
+            }
+            """,
+            "1",
+        )
+
+    def test_loading_through_null_faults(self):
+        self.assertRuntimeError(
+            "fn main(): int { let h: heapptr; h = null; println(heap_load(h)); return 0; }",
+            "Null pointer dereference",
+        )
+
+    def test_storing_through_null_faults(self):
+        self.assertRuntimeError(
+            "fn main(): int { let h: heapptr; h = null; heap_store(h, 5); return 0; }",
+            "Null pointer dereference",
+        )
+
+    def test_not_assignable_to_ptr(self):
+        self.assertCompileError(
+            "fn main(): int { let p: ptr; p = null; return 0; }",
+            "Cannot assign heapptr to ptr",
+        )
+
+    def test_not_assignable_to_int(self):
+        self.assertCompileError(
+            "fn main(): int { let i: int; i = null; return 0; }",
+            "Cannot assign heapptr to int",
+        )
+

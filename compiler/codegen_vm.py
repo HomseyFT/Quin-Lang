@@ -365,7 +365,9 @@ class CodeGenVM:
 
     def _emit_expr(self, e: A.Expr, layout: FunctionLayout, ctx: Context):
         if isinstance(e, A.Literal):
-            if isinstance(e.value, bool):
+            if e.value is None:
+                self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            elif isinstance(e.value, bool):
                 self.code.append(Instruction(OpCode.PUSH_INT, 1 if e.value else 0))
             elif isinstance(e.value, int):
                 self.code.append(Instruction(OpCode.PUSH_INT, e.value & 0xFFFF))

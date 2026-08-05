@@ -322,6 +322,9 @@ class SemanticAnalyzer:
 
     def _analyze_expr(self, e: A.Expr, scope: Scope) -> Type:
         if isinstance(e, A.Literal):
+            if e.value is None:
+                self.ctx.set_type(e, HeapPtr)
+                return HeapPtr
             if isinstance(e.value, bool):
                 self.ctx.set_type(e, Bool)
                 return Bool
