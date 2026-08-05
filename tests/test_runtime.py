@@ -217,13 +217,27 @@ class TestArrayBounds(QuinTestCase):
     on whatever variable was declared next.
     """
 
-    def test_in_frame_overrun_faults(self):
-        self.assertRuntimeError(
+    def test_constant_overrun_is_a_compile_error(self):
+        self.assertCompileError(
             """
             fn main(): int {
                 let a: int[2];
                 let neighbor: int = 77;
                 println(a[2]);
+                return 0;
+            }
+            """,
+            "out of bounds for length 2",
+        )
+
+    def test_dynamic_overrun_faults_at_runtime(self):
+        self.assertRuntimeError(
+            """
+            fn main(): int {
+                let a: int[2];
+                let neighbor: int = 77;
+                let i: int = 2;
+                println(a[i]);
                 return 0;
             }
             """,
@@ -246,10 +260,10 @@ class TestArrayBounds(QuinTestCase):
             "Array index out of bounds",
         )
 
-    def test_leaving_the_frame_faults(self):
-        self.assertRuntimeError(
+    def test_leaving_the_frame_is_a_compile_error(self):
+        self.assertCompileError(
             "fn main(): int { let a: int[2]; println(a[50]); return 0; }",
-            "Array index out of bounds",
+            "out of bounds for length 2",
         )
 
     def test_negative_index_faults(self):
@@ -259,8 +273,16 @@ class TestArrayBounds(QuinTestCase):
         )
 
     def test_taking_an_out_of_range_address_faults(self):
+        # Address-of still validates at runtime; the static check reaches it in
+        # the follow-up that de-duplicates index validation.
         self.assertRuntimeError(
             "fn main(): int { let a: int[2]; let p: ptr; p = @a[2]; return 0; }",
+            "Array index out of bounds",
+        )
+
+    def test_dynamic_out_of_range_address_faults_at_runtime(self):
+        self.assertRuntimeError(
+            "fn main(): int { let a: int[2]; let p: ptr; let i: int = 2; p = @a[i]; return 0; }",
             "Array index out of bounds",
         )
 

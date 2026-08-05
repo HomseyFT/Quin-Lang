@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 from . import ast as A
 from .compiler_types import (
-    Type, Int, Str, Void, Bool, Ptr, type_from_name, is_array_type, UnknownTypeError,
+    Type, Int, Str, Void, Bool, Ptr, type_from_name, is_array_type, array_length, UnknownTypeError,
 )
 from .builtins import get_builtins
 
@@ -386,6 +386,16 @@ class SemanticAnalyzer:
             idx_t = self._analyze_expr(e.index, scope)
             if idx_t != Int:
                 raise SemanticError("Array index must be int", e.line, e.col)
+            # Static range check for literal indices
+            if isinstance(e.index, A.Literal) and isinstance(e.index.value, int) and not isinstance(e.index.value, bool):
+                length = array_length(arr_t)
+                if length is not None:
+                    idx_val = e.index.value
+                    if idx_val < 0 or idx_val >= length:
+                        raise SemanticError(
+                            f"Array index {idx_val} out of bounds for length {length}",
+                            e.line, e.col,
+                        )
             self.ctx.set_type(e, Int)
             return Int
         if isinstance(e, A.AddressOf):
