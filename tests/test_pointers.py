@@ -351,3 +351,79 @@ class TestArrayHelpers(QuinTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHeapPointerArithmetic(QuinTestCase):
+    """heapptr supports offsetting; ptr deliberately does not.
+
+    A ptr is an index into the current frame, so arithmetic on it would step
+    off the end of an array and defeat BOUNDS_CHECK. A heapptr is a byte
+    offset into the heap, where offsetting is the only way to reach anything
+    past the first word of an allocation.
+    """
+
+    def test_offsetting_reaches_a_later_word(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let h: heapptr;
+                h = alloc(4);
+                heap_store(h, 11);
+                heap_store(h + 2, 22);
+                println(heap_load(h));
+                println(heap_load(h + 2));
+                return 0;
+            }
+            """,
+            "11", "22",
+        )
+
+    def test_int_plus_heapptr_is_symmetric(self):
+        self.assertCompiles(
+            "fn main(): int { let h: heapptr; h = alloc(4); h = 2 + h; return 0; }"
+        )
+
+    def test_subtracting_an_int_moves_back(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let h: heapptr;
+                h = alloc(4);
+                heap_store(h, 5);
+                h = h + 2;
+                println(heap_load(h - 2));
+                return 0;
+            }
+            """,
+            "5",
+        )
+
+    def test_difference_of_two_heapptrs_is_an_int(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let a: heapptr;
+                let b: heapptr;
+                let d: int;
+                a = alloc(2);
+                b = alloc(2);
+                d = b - a;
+                println(d);
+                return 0;
+            }
+            """,
+            "2",
+        )
+
+    def test_multiplying_a_heapptr_is_rejected(self):
+        self.assertCompileError(
+            "fn main(): int { let h: heapptr; h = alloc(4); h = h * 2; return 0; }",
+            "require int operands",
+        )
+
+    def test_ptr_arithmetic_is_rejected(self):
+        self.assertCompileError(
+            "fn main(): int { let x: int; let p: ptr; x = 1; p = @x; p = p + 1; return 0; }",
+            "require int operands",
+        )
+

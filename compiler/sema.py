@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 from . import ast as A
 from .compiler_types import (
-    Type, Int, Str, Void, Bool, Ptr, type_from_name, is_array_type, array_length, UnknownTypeError,
+    Type, Int, Str, Void, Bool, Ptr, HeapPtr, type_from_name, is_array_type, array_length, UnknownTypeError,
 )
 from .builtins import get_builtins
 
@@ -356,6 +356,19 @@ class SemanticAnalyzer:
             lt = self._analyze_expr(e.left, scope)
             rt = self._analyze_expr(e.right, scope)
             if e.op in ('+', '-', '*', '/'):
+                # Heap pointer arithmetic: allow heapptr +/- int, and heapptr - heapptr.
+                if e.op == '+':
+                    if (lt == HeapPtr and rt == Int) or (lt == Int and rt == HeapPtr):
+                        self.ctx.set_type(e, HeapPtr)
+                        return HeapPtr
+                elif e.op == '-':
+                    if lt == HeapPtr and rt == Int:
+                        self.ctx.set_type(e, HeapPtr)
+                        return HeapPtr
+                    if lt == HeapPtr and rt == HeapPtr:
+                        self.ctx.set_type(e, Int)
+                        return Int
+                # Fall through to existing int-only rule for all other combos.
                 if lt == Int and rt == Int:
                     self.ctx.set_type(e, Int)
                     return Int
