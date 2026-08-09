@@ -161,15 +161,16 @@ println(true);
 ### Expressions
 
 ```quin
-123        0xFF        "text"       true      false
--x         !flag       &x
+123        0xFF        "text"       true      false     null
+-x         !flag       ~x           @x
 a + b      a - b       a * b        a / b     a % b
+a ^ b      a | b       a & b        a << b    a >> b
 a == b     a != b      a < b        a <= b    a > b     a >= b
 a && b     a || b
 foo(1, 2)  arr[i]
 ```
 
-Precedence, tightest first: postfix `()` / `[]`, then unary `! - &`, then `* / %`, then `+ -`, then relational `< <= > >=`, then equality `== !=`, then `&&`, then `||`. `&&` and `||` short-circuit. Comparisons require both sides to have the same type and produce `bool`.
+Precedence, tightest first: postfix `()` / `[]`, then unary `! - ~ @`, then `* / %`, then `+ -`, then `<< >>`, then relational `< <= > >=`, then equality `== !=`, then `&`, then `^`, then `|`, then `&&`, then `||`. `&&` and `||` short-circuit. Comparisons require both sides to have the same type and produce `bool`.
 
 Integer literals are 16-bit and must fit in `0..65535`; there are no negative literals, only the unary `-` operator. `65535` and `-1` are the same value, and both print as `-1`.
 
@@ -216,15 +217,15 @@ Both take the array by name — an arbitrary expression that happens to be an ar
 
 QuinLang has two kinds of memory, and they are **separate types** so that an address from one cannot be used with the other.
 
-`ptr` is a slot in the current frame, produced by `&`, and read or written with `load16` / `store16` / `memcpy` / `memset`:
+`ptr` is a slot in the current frame, produced by `@`, and read or written with `load16` / `store16` / `memcpy` / `memset`:
 
 ```quin
 let x: int;
 let a: int[3];
 let p: ptr;
 
-p = &x;        // slot of x
-p = &a[1];     // slot of a, plus 1
+p = @x;        // slot of x
+p = @a[1];     // slot of a, plus 1
 store16(p, 4321);
 println(load16(p));
 ```
@@ -235,8 +236,8 @@ Because a frame address is a slot index, `memcpy` / `memset` counts are measured
 let src: int[3];
 let dst: int[3];
 
-memcpy(&dst[0], &src[0], 3);   // 3 slots
-memset(&dst[0], 0, 3);
+memcpy(@dst[0], @src[0], 3);   // 3 slots
+memset(@dst[0], 0, 3);
 ```
 
 `heapptr` is a byte offset into a 64 KiB heap, produced by `alloc` and accessed a word at a time:
@@ -250,14 +251,16 @@ println(heap_load(h)); // 1234
 
 The allocator is a bump pointer with no `free`, and it runs out at 64 KiB.
 
+`null` is a `heapptr` literal equal to heap address 0. Address 0 is reserved, so no allocation returns it. `heap_load(null)` or `heap_store(null, ...)` raises `Null pointer dereference`. `heapptr + int` and `heapptr - int` give a `heapptr`; `heapptr - heapptr` gives an `int` distance in bytes.
+
 Crossing the two is a compile error rather than a silent misread:
 
 ```quin
 load16(alloc(2));   // Argument type mismatch: expected ptr, got heapptr
-heap_load(&x);      // Argument type mismatch: expected heapptr, got ptr
+heap_load(@x);      // Argument type mismatch: expected heapptr, got ptr
 ```
 
-What is still on you: a `ptr` only makes sense inside the frame that produced it. Returning `&x` and dereferencing it in the caller reads whatever local occupies that slot, or faults with `Local index out of range` if the caller's frame is smaller.
+What is still on you: a `ptr` only makes sense inside the frame that produced it. Returning `@x` and dereferencing it in the caller reads whatever local occupies that slot, or faults with `Local index out of range` if the caller's frame is smaller.
 
 ### Inline bytecode
 
@@ -374,7 +377,7 @@ python3 -m tests.update_golden
 
 ## Limitations and gotchas
 
-- No bounds checking on array indexing or `array_push` / `array_pop`; an in-frame overrun silently hits a neighboring local.
+- Array indexing is bounds-checked at compile time for constant indices and at run time for computed indices; `array_push` / `array_pop` are **not** bounds-checked, so an in-frame overrun silently hits a neighboring local.
 - A `ptr` does not outlive the frame it points into.
 - The heap is a bump allocator with no `free`.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
@@ -382,6 +385,6 @@ python3 -m tests.update_golden
 - `main`'s return value never reaches the process exit code.
 - `vm_asm` blocks are not checked for stack balance until run time.
 
-Future directions: `for` loops and `break` / `continue`, bounds-checked indexing, restricting relational operators to `int`, structs, and filling out `std/`.
+Future directions: `for` loops and `break` / `continue`, restricting relational operators to `int`, structs, and filling out `std/`.
 
 The goal is to keep the compiler and VM small enough to read in one sitting and see exactly how each language feature works end to end.
