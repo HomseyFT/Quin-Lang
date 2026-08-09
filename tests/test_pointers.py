@@ -351,3 +351,134 @@ class TestArrayHelpers(QuinTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHeapPointerArithmetic(QuinTestCase):
+    """heapptr supports offsetting; ptr deliberately does not.
+
+    A ptr is an index into the current frame, so arithmetic on it would step
+    off the end of an array and defeat BOUNDS_CHECK. A heapptr is a byte
+    offset into the heap, where offsetting is the only way to reach anything
+    past the first word of an allocation.
+    """
+
+    def test_offsetting_reaches_a_later_word(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let h: heapptr;
+                h = alloc(4);
+                heap_store(h, 11);
+                heap_store(h + 2, 22);
+                println(heap_load(h));
+                println(heap_load(h + 2));
+                return 0;
+            }
+            """,
+            "11", "22",
+        )
+
+    def test_int_plus_heapptr_is_symmetric(self):
+        self.assertCompiles(
+            "fn main(): int { let h: heapptr; h = alloc(4); h = 2 + h; return 0; }"
+        )
+
+    def test_subtracting_an_int_moves_back(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let h: heapptr;
+                h = alloc(4);
+                heap_store(h, 5);
+                h = h + 2;
+                println(heap_load(h - 2));
+                return 0;
+            }
+            """,
+            "5",
+        )
+
+    def test_difference_of_two_heapptrs_is_an_int(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let a: heapptr;
+                let b: heapptr;
+                let d: int;
+                a = alloc(2);
+                b = alloc(2);
+                d = b - a;
+                println(d);
+                return 0;
+            }
+            """,
+            "2",
+        )
+
+    def test_multiplying_a_heapptr_is_rejected(self):
+        self.assertCompileError(
+            "fn main(): int { let h: heapptr; h = alloc(4); h = h * 2; return 0; }",
+            "require int operands",
+        )
+
+    def test_ptr_arithmetic_is_rejected(self):
+        self.assertCompileError(
+            "fn main(): int { let x: int; let p: ptr; x = 1; p = @x; p = p + 1; return 0; }",
+            "require int operands",
+        )
+
+
+class TestNull(QuinTestCase):
+    """'null' is a heapptr-typed keyword literal at the reserved address 0.
+
+    The allocator starts at address 2, so no allocation can collide with it,
+    which is what lets a null dereference be detected rather than quietly
+    reading whatever sits at address 0.
+    """
+
+    def test_assignable_to_heapptr(self):
+        self.assertCompiles("fn main(): int { let h: heapptr; h = null; return 0; }")
+
+    def test_compares_equal_to_itself(self):
+        self.assertPrints(
+            "fn main(): int { let h: heapptr; h = null; if (h == null) { println(1); } return 0; }",
+            "1",
+        )
+
+    def test_alloc_never_returns_null(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let h: heapptr;
+                h = alloc(2);
+                if (h == null) { println(0); } else { println(1); }
+                return 0;
+            }
+            """,
+            "1",
+        )
+
+    def test_loading_through_null_faults(self):
+        self.assertRuntimeError(
+            "fn main(): int { let h: heapptr; h = null; println(heap_load(h)); return 0; }",
+            "Null pointer dereference",
+        )
+
+    def test_storing_through_null_faults(self):
+        self.assertRuntimeError(
+            "fn main(): int { let h: heapptr; h = null; heap_store(h, 5); return 0; }",
+            "Null pointer dereference",
+        )
+
+    def test_not_assignable_to_ptr(self):
+        self.assertCompileError(
+            "fn main(): int { let p: ptr; p = null; return 0; }",
+            "Cannot assign heapptr to ptr",
+        )
+
+    def test_not_assignable_to_int(self):
+        self.assertCompileError(
+            "fn main(): int { let i: int; i = null; return 0; }",
+            "Cannot assign heapptr to int",
+        )
+
