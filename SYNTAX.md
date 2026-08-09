@@ -6,7 +6,7 @@ The reference for QuinLang's surface syntax and built-ins. Programs are compiled
 
 - **Comments**: `// to end of line`. There are no block comments.
 - **Identifiers**: start with a letter or `_`, then letters, digits, or `_`.
-- **Keywords**: `fn let return if else while true false int str void ptr heapptr print println vm_asm include`. These cannot be used as identifiers.
+- **Keywords**: `fn let return if else while true false null int str void ptr heapptr print println vm_asm include`. These cannot be used as identifiers.
 - **Integer literals**: decimal (`123`) or hexadecimal (`0xFF`, `0XFF`). A literal must fit in 16 bits (`0..65535`); larger values are a lex error. There are no negative literals — `-1` is the unary `-` operator applied to `1`.
 - **String literals**: `"..."`, delimited by double quotes, may span lines. There are **no escape sequences**: `\n` inside a string literal is a backslash followed by `n`.
 - **Whitespace** is insignificant.
@@ -216,6 +216,7 @@ The block is emitted verbatim with no verification that it leaves the operand st
 "Hello"     // string
 true
 false
+null        // heapptr literal, equal to heap address 0
 ```
 
 ### Unary operators
@@ -223,16 +224,20 @@ false
 ```quin
 -x      // arithmetic negation (int)
 !flag   // logical not (bool)
-&x      // address-of (see below)
+~x      // bitwise not (int)
+@x      // address-of (see below)
 ```
 
-`-` requires `int` and `!` requires `bool`; anything else is a type error.
+`-` and `~` require `int`, `!` requires `bool`, and `@` produces a `ptr`; anything else is a type error.
 
 ### Binary operators
 
 ```quin
 // Arithmetic (int operands, int result)
 a + b    a - b    a * b    a / b    a % b
+
+// Bitwise (int operands, int result)
+a ^ b    a | b    a & b    a << b   a >> b
 
 // Comparisons (operands of the same type, bool result)
 a == b   a != b   a < b    a <= b   a > b    a >= b
@@ -243,19 +248,24 @@ a && b   a || b
 
 - `/` truncates toward zero (`-7 / 2` is `-3`), and `%` takes the sign of the left operand (`-7 % 2` is `-1`). Division or modulo by zero is a runtime error.
 - `int` arithmetic wraps at 16 bits.
+- `^`, `|`, `&`, `<<`, and `>>` are bitwise operators; they require `int` operands and produce an `int`. `&` is binary bitwise AND, not address-of.
 - Comparisons require both operands to have the *same* type; `1 == true` is an error.
 - `&&` and `||` short-circuit — the right operand is not evaluated when the left decides the result.
 
 Precedence, tightest first:
 
 1. Postfix `()` (call), `[]` (index)
-2. Unary `!`, `-`, `&`
+2. Unary `!`, `-`, `~`, `@`
 3. `*`, `/`, `%`
 4. `+`, `-`
-5. Relational `<`, `<=`, `>`, `>=`
-6. Equality `==`, `!=`
-7. `&&`
-8. `||`
+5. `<<`, `>>`
+6. Relational `<`, `<=`, `>`, `>=`
+7. Equality `==`, `!=`
+8. `&`
+9. `^`
+10. `|`
+11. `&&`
+12. `||`
 
 All binary operators are left-associative. Parentheses group as usual.
 
@@ -270,7 +280,8 @@ println(a[2]);
 
 - The index must be `int`; elements are always `int`.
 - The base must be a named local array.
-- **No bounds checking.** An out-of-range index reads or writes the neighboring local slot; the VM only faults (`Local index out of range`) when the index leaves the frame entirely.
+- A constant index outside the array is rejected at compile time by sema.
+- A computed index is checked at run time against the array's own length by the `BOUNDS_CHECK` opcode, raising `Array index out of bounds`.
 
 ### Pointers and address-of
 
@@ -279,15 +290,15 @@ let x: int;
 let a: int[3];
 let p: ptr;
 
-p = &x;        // address of a variable
-p = &a[1];     // address of an array element
+p = @x;        // address of a variable
+p = @a[1];     // address of an array element
 ```
 
 A `ptr` is an **index into the current frame's locals**, not a machine address. Consequences:
 
-- Pointers are only meaningful inside the frame that created them. Returning `&x` and dereferencing it in the caller reads an unrelated slot, or faults if the caller's frame is smaller.
+- Pointers are only meaningful inside the frame that created them. Returning `@x` and dereferencing it in the caller reads an unrelated slot, or faults if the caller's frame is smaller.
 - `memcpy` / `memset` counts are in **slots (16-bit words)**, not bytes.
-- Heap addresses are a *separate* address space with its own type, `heapptr`. Mixing the two is a compile error, not a silent misread: `load16(alloc(2))` and `heap_load(&x)` are both rejected.
+- Heap addresses are a *separate* address space with its own type, `heapptr`. Mixing the two is a compile error, not a silent misread: `load16(alloc(2))` and `heap_load(@x)` are both rejected.
 
 ### Function calls
 
@@ -361,10 +372,10 @@ src[0] = 7;
 src[1] = 8;
 src[2] = 9;
 
-memcpy(&dst[0], &src[0], 3);   // 3 elements
+memcpy(@dst[0], @src[0], 3);   // 3 elements
 println(dst[0]);               // 7
 
-memset(&dst[0], 0, 3);
+memset(@dst[0], 0, 3);
 println(dst[0]);               // 0
 ```
 
@@ -384,6 +395,9 @@ println(heap_load(p));   // 1234
 - Addresses are byte offsets; a word occupies two of them, so consecutive words are at `p`, `p + 2`, `p + 4`, ...
 - Word accesses are bounds-checked against the heap, but nothing checks that an address belongs to the allocation you think it does.
 - A `heapptr` cannot be passed to `load16` / `store16` / `memcpy` / `memset`, and a `ptr` cannot be passed to `heap_load` / `heap_store`. The type checker rejects both.
+- `null` is a `heapptr` literal equal to heap address 0. Address 0 is reserved, so no allocation returns it.
+- `heap_load(null)` or `heap_store(null, ...)` raises `Null pointer dereference`.
+- `heapptr + int` and `heapptr - int` give a `heapptr`; `heapptr - heapptr` gives an `int` distance in bytes.
 
 ### `ct_eq` / `ct_select`
 
