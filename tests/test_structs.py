@@ -7,7 +7,7 @@ the object header and the stack map, which exist for a collector to consume.
 
 import unittest
 
-from runtime.vm import QuinVM, RAW_TAG
+from runtime.vm import QuinVM, HEADER_BYTES, KIND_RAW, KIND_STRUCT
 from tests.harness import QuinTestCase, compile_source, run_source
 
 
@@ -514,17 +514,19 @@ class TestObjectLayout(QuinTestCase):
         )
         ref = vm.locals[0]
         self.assertNotEqual(ref, 0)
-        header = vm._read_word(ref - 2)
-        self.assertEqual(header, 0)  # the only struct, so type id 0
+        hdr = ref - HEADER_BYTES
+        self.assertEqual(vm._kind(hdr), KIND_STRUCT)
+        self.assertEqual(vm._detail(hdr), 0)  # the only struct, so type id 0
         self.assertEqual(vm._read_word(ref), 42)
 
-    def test_raw_allocation_header_is_tagged_with_its_size(self):
+    def test_raw_allocation_header_records_its_size(self):
         vm = run_and_inspect(
             "fn main(): int { let h: heapptr = alloc(6); return 0; }"
         )
-        header = vm._read_word(vm.locals[0] - 2)
-        self.assertTrue(header & RAW_TAG, "raw blocks must be tagged pointerless")
-        self.assertEqual(header & ~RAW_TAG, 6)
+        hdr = vm.locals[0] - HEADER_BYTES
+        self.assertEqual(vm._kind(hdr), KIND_RAW,
+                         "raw blocks are kept alive but never traced through")
+        self.assertEqual(vm._detail(hdr), 6)
 
     def test_allocations_do_not_overlap_their_headers(self):
         vm = run_and_inspect(
@@ -534,7 +536,7 @@ class TestObjectLayout(QuinTestCase):
         a, b = vm.locals[0], vm.locals[1]
         self.assertNotEqual(a, b)
         # b's header sits above a's two-word body.
-        self.assertGreaterEqual(b - 2, a + 4)
+        self.assertGreaterEqual(b - HEADER_BYTES, a + 4)
         self.assertEqual(vm._read_word(a), 1)
         self.assertEqual(vm._read_word(b), 2)
 
@@ -545,30 +547,42 @@ class TestObjectLayout(QuinTestCase):
         main = next(f for f in functions if f.name == "main")
         self.assertEqual(main.num_locals, 2)
 
-    def test_oversized_raw_allocation_is_rejected(self):
-        # 32767 is the largest int, and one byte more than a header can encode.
+    def test_a_block_larger_than_the_heap_is_rejected(self):
+        # The size now has a header word to itself, so the only limit left is
+        # the heap. Two blocks of 32767 cannot both fit in 64 KiB, and the
+        # first is still reachable when the second is requested.
         self.assertRuntimeError(
-            "fn main(): int { let h: heapptr = alloc(32767); return 0; }",
-            "too large to record in an object header",
+            "fn main(): int { let a: heapptr = alloc(32767); "
+            "let b: heapptr = alloc(32767); println(heap_load(a)); return 0; }",
+            "Heap out of memory",
+        )
+
+    def test_the_largest_single_block_now_fits(self):
+        self.assertPrints(
+            "fn main(): int { let h: heapptr = alloc(32767); heap_store(h, 5); "
+            "println(heap_load(h)); return 0; }",
+            "5",
         )
 
     def test_the_upper_half_of_the_heap_is_usable(self):
         # Heap addresses run to 65535. Sign-extending one would make every
-        # object above 32767 look like a negative address and fault.
-        self.assertPrints(
-            NODE +
-            """
+        # object above 32767 look like a negative address and fault. A live
+        # Node costs 8 bytes, so 6000 of them reach well past the halfway
+        # mark while still fitting in 64 KiB.
+        source = NODE + """
             fn main(): int {
                 let head: Node = null;
-                for (let i = 0; i < 9000; i = i + 1) {
+                for (let i = 0; i < 6000; i = i + 1) {
                     head = Node { value: i, next: head };
                 }
                 println(head.value);
                 return 0;
             }
-            """,
-            "8999",
-        )
+            """
+        self.assertPrints(source, "5999")
+        vm = run_and_inspect(source)
+        self.assertGreater(vm.locals[0], 0x8000,
+                           "the list should have grown past the signed-word boundary")
 
     def test_heap_still_runs_out(self):
         self.assertRuntimeError(

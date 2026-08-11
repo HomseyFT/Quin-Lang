@@ -215,17 +215,101 @@ class TestHeap(QuinTestCase):
             "7",
         )
 
-    def test_exhaustion_is_a_runtime_error(self):
-        self.assertRuntimeError(
+    def test_dropped_allocations_are_reclaimed(self):
+        # Each iteration overwrites p, so the previous block becomes garbage.
+        # 1000 x 100 bytes is far more than the heap holds; the program only
+        # completes because the collector reclaims what was dropped.
+        self.assertPrints(
             """
             fn main(): int {
                 let p: heapptr;
                 let i: int;
                 while (i < 1000) { p = alloc(100); i = i + 1; }
+                println(i);
+                return 0;
+            }
+            """,
+            "1000",
+        )
+
+    def test_exhaustion_is_still_a_runtime_error_when_nothing_can_be_freed(self):
+        # Every block stays reachable through the list, so collection cannot help.
+        self.assertRuntimeError(
+            """
+            struct Keep { block: heapptr, next: Keep }
+            fn main(): int {
+                let head: Keep;
+                let i: int;
+                while (i < 1000) {
+                    head = Keep { block: alloc(100), next: head };
+                    i = i + 1;
+                }
                 return 0;
             }
             """,
             "Heap out of memory",
+        )
+
+
+class TestAddressOfRejectsReferences(QuinTestCase):
+    """A frame pointer to a reference slot would defeat the collector.
+
+    load16 would read the address out as an int and store16 would put one
+    back, which is the last way to hide a reference from the GC.
+    """
+
+    def test_address_of_a_heapptr_is_rejected(self):
+        self.assertCompileError(
+            "fn main(): int { let h: heapptr = alloc(2); let p: ptr = @h; return 0; }",
+            "Cannot take the address of 'h'",
+        )
+
+    def test_address_of_a_struct_is_rejected(self):
+        self.assertCompileError(
+            "struct Node { v: int }\n"
+            "fn main(): int { let n: Node = Node { v: 1 }; let p: ptr = @n; return 0; }",
+            "Cannot take the address of 'n'",
+        )
+
+    def test_address_of_a_reference_parameter_is_rejected(self):
+        self.assertCompileError(
+            "struct Node { v: int }\n"
+            "fn f(n: Node): int { let p: ptr = @n; return 0; }\n"
+            "fn main(): int { return 0; }",
+            "Cannot take the address of 'n'",
+        )
+
+    def test_address_of_an_int_still_works(self):
+        self.assertPrints(
+            "fn main(): int { let x: int = 5; let p: ptr = @x; println(load16(p)); return 0; }",
+            "5",
+        )
+
+    def test_address_of_an_array_element_still_works(self):
+        self.assertPrints(
+            "fn main(): int { let a: int[3]; a[1] = 7; let p: ptr = @a[1]; "
+            "println(load16(p)); return 0; }",
+            "7",
+        )
+
+    def test_address_of_a_bool_still_works(self):
+        self.assertCompiles(
+            "fn main(): int { let b: bool = true; let p: ptr = @b; return 0; }"
+        )
+
+    def test_a_reference_cannot_be_laundered_into_an_int(self):
+        # The round trip this closes: read a heapptr out of its slot as an int,
+        # hide it somewhere untraced, then write it back into a heapptr slot.
+        self.assertCompileError(
+            """
+            fn main(): int {
+                let h: heapptr = alloc(4);
+                let p: ptr = @h;
+                let n: int = load16(p);
+                return 0;
+            }
+            """,
+            "Cannot take the address of 'h'",
         )
 
 
