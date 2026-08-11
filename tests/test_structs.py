@@ -5,7 +5,9 @@ aliasing and null as they do about reading a field back. The layout tests pin
 the object header and the stack map, which exist for a collector to consume.
 """
 
+import io
 import unittest
+from contextlib import redirect_stdout
 
 from runtime.vm import QuinVM, HEADER_BYTES, KIND_RAW, KIND_STRUCT
 from tests.harness import QuinTestCase, compile_source, run_source
@@ -16,10 +18,15 @@ NODE = "struct Node { value: int, next: Node }\n"
 
 
 def run_and_inspect(source: str):
-    """Run a program and hand back the finished VM, for poking at its heap."""
+    """Run a program and hand back the finished VM, for poking at its heap.
+
+    stdout is swallowed: these tests examine the heap rather than the output,
+    and without this their programs print into the test runner's own output.
+    """
     code, functions, strings, structs = compile_source(source)
     vm = QuinVM(code, functions, strings, structs)
-    vm.run_main()
+    with redirect_stdout(io.StringIO()):
+        vm.run_main()
     return vm
 
 

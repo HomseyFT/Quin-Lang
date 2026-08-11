@@ -77,10 +77,107 @@ class TestComparisons(QuinTestCase):
         self.assertExprPrints("true == true", "true")
         self.assertExprPrints("true != false", "true")
 
-    def test_string_equality_uses_interning(self):
-        # Equal literals intern to the same id, so == is meaningful.
+    def test_string_equality(self):
         self.assertExprPrints('"abc" == "abc"', "true")
         self.assertExprPrints('"abc" == "xyz"', "false")
+        self.assertExprPrints('"abc" != "xyz"', "true")
+        self.assertExprPrints('"abc" != "abc"', "false")
+
+    def test_string_ordering_compares_content(self):
+        # These used to compare interned ids, so the answer depended on which
+        # literal the compiler saw first: "b" < "a" was true.
+        self.assertExprPrints('"apple" < "banana"', "true")
+        self.assertExprPrints('"banana" < "apple"', "false")
+        self.assertExprPrints('"b" < "a"', "false")
+        self.assertExprPrints('"a" < "b"', "true")
+
+    def test_string_ordering_is_independent_of_literal_order(self):
+        # The right-hand literal is interned first here, and the left-hand one
+        # first in the mirrored case. Content ordering must not notice.
+        self.assertPrints(
+            'fn main(): int { println("zzz" > "aaa"); println("aaa" > "zzz"); return 0; }',
+            "true", "false",
+        )
+        self.assertPrints(
+            'fn main(): int { println("aaa" < "zzz"); println("zzz" < "aaa"); return 0; }',
+            "true", "false",
+        )
+
+    def test_string_ordering_handles_prefixes(self):
+        self.assertExprPrints('"abc" < "abcd"', "true")
+        self.assertExprPrints('"abcd" < "abc"', "false")
+        self.assertExprPrints('"" < "a"', "true")
+        self.assertExprPrints('"" == ""', "true")
+
+    def test_all_six_string_comparisons(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                println("b" == "b");
+                println("b" != "c");
+                println("b" < "c");
+                println("b" <= "b");
+                println("b" > "a");
+                println("b" >= "b");
+                return 0;
+            }
+            """,
+            "true", "true", "true", "true", "true", "true",
+        )
+
+    def test_string_ordering_agrees_with_equality(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                println("same" < "same");
+                println("same" > "same");
+                println("same" <= "same");
+                println("same" >= "same");
+                return 0;
+            }
+            """,
+            "false", "false", "true", "true",
+        )
+
+    def test_string_comparison_of_variables(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let a: str = "delta";
+                let b: str = "alpha";
+                println(a > b);
+                println(b > a);
+                return 0;
+            }
+            """,
+            "true", "false",
+        )
+
+    def test_string_comparison_across_a_call(self):
+        self.assertPrints(
+            """
+            fn pick(): str { return "middle"; }
+            fn main(): int { println(pick() < "zulu"); return 0; }
+            """,
+            "true",
+        )
+
+    def test_string_comparison_leaves_the_stack_balanced(self):
+        # STR_CMP pops two and pushes one, then the comparison pops two more.
+        # An imbalance would surface at RET.
+        self.assertPrints(
+            """
+            fn main(): int {
+                let n: int = 0;
+                for (let i = 0; i < 3; i = i + 1) {
+                    if ("a" < "b") { n = n + 1; }
+                }
+                println(n);
+                return 0;
+            }
+            """,
+            "3",
+        )
 
 
 class TestControlFlow(QuinTestCase):
