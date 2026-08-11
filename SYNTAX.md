@@ -59,7 +59,7 @@ fn main(): int { return 0; }
 fn main(): void { }
 ```
 
-`main`'s return value is the VM's exit value, but the driver does not propagate it to the process exit code.
+`main`'s return value becomes the process exit code. Only its low byte survives, as in C: `return 256` exits 0 and `return -1` exits 255. Compile and runtime errors also exit 1, so a program returning 1 is indistinguishable from a failure unless you check stderr.
 
 ## Types
 
@@ -372,6 +372,8 @@ a && b   a || b
 - `^`, `|`, `&`, `<<`, and `>>` are bitwise operators; they require `int` operands and produce an `int`. `&` is binary bitwise AND, not address-of.
 - Comparisons require both operands to have the *same* type; `1 == true` is an error.
 - `&&` and `||` short-circuit — the right operand is not evaluated when the left decides the result.
+- Comparing two `str` values compares their **content**, so `"apple" < "banana"` is `true`. Ordering is lexicographic by byte and does no case folding, which puts every uppercase letter before every lowercase one: `"Z" < "a"` is `true`.
+- Relational operators do not apply to struct references or `null`; `==` and `!=` do, and compare identity.
 
 Precedence, tightest first:
 
@@ -566,7 +568,7 @@ println(ct_select(0, a, b));   // 20
 - Pointers are untyped within their address space: a `ptr` is just a slot index, and nothing checks what kind of data lives there.
 - Pointers do not outlive the frame they point into.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
-- Comparing `str` values compares interned ids, so `==` and `!=` work as expected but `<` / `>` are meaningless (`"b" < "a"` is `true`).
+- Comparing `str` values compares content. Ordering is lexicographic by byte, with no case folding, so `"Z" < "a"` is `true`.
 - No methods, no arrays of structs, and no array-typed struct fields.
 - The collector never moves an object, so a heap with enough free bytes can still fail to place one if they are not contiguous.
 - A variable that is dead but still in scope keeps its object alive until its function returns.

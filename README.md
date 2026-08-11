@@ -50,7 +50,13 @@ python3 -m compiler.driver_vm examples/hello.ql
 
 Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
 
-Note that `main`'s return value is computed by the VM but **not** propagated to the process exit code — the driver always exits 0 on a successful run.
+`main`'s return value becomes the process exit code, so a program can be tested from a shell:
+
+```bash
+python3 -m compiler.driver_vm prog.ql && echo "ok"
+```
+
+An exit status is 8 bits wide while `int` is 16-bit signed, so the low byte is what survives, exactly as in C: `return 256` exits 0 and `return -1` exits 255. Compile and runtime errors exit 1, which a program returning 1 cannot be distinguished from — check stderr if that matters.
 
 ### Running the tests
 
@@ -58,7 +64,7 @@ Note that `main`'s return value is computed by the VM but **not** propagated to 
 python3 -m unittest discover -s tests -t .
 ```
 
-407 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+432 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -473,6 +479,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_resolver.py` | Include paths, cycles, diamonds, duplicate definitions |
 | `tests/test_structs.py` | Struct declaration, literals, fields, references, null, object layout |
 | `tests/test_gc.py` | What the collector reclaims, what it must not, and operand-stack tagging |
+| `tests/test_driver.py` | The CLI as a real process: exit codes and error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 
 Tests are written as QuinLang source strings and asserted on their output or their error message, so they exercise the whole pipeline rather than one pass:
@@ -517,10 +524,10 @@ python3 -m tests.update_golden
 - A `ptr` does not outlive the frame it points into.
 - Collection is triggered only by allocation pressure or an explicit `gc()`, and it never moves an object.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
-- Comparing `str` values compares interned ids, so `==` and `!=` behave sensibly but `<` / `>` are meaningless (`"b" < "a"` is `true`).
-- `main`'s return value never reaches the process exit code.
+- Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
+- The process exit code carries only the low byte of `main`'s return value, and 1 collides with the error exit code.
 - `vm_asm` blocks are not checked for stack balance until run time.
 
-Future directions: restricting relational operators to `int`, a compacting collector to remove fragmentation, and filling out `std/`.
+Future directions: a compacting collector to remove fragmentation and shorten the window in which a dead-but-in-scope variable retains an object, then a debugger, and filling out `std/`.
 
 The goal is to keep the compiler and VM small enough to read in one sitting and see exactly how each language feature works end to end.
