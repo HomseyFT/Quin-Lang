@@ -525,7 +525,7 @@ gc();
 
 Forces a garbage collection. Collection also happens on its own whenever an allocation cannot be satisfied, so a program never needs to call this; it exists to make collection happen at a known point, which is useful in tests and when demonstrating the collector.
 
-The collector is precise, non-moving, and mark-sweep. It traces from every reference reachable in a frame or on the operand stack, so cycles are reclaimed and a reference stays valid for as long as it is held. See [Garbage collection](README.md#garbage-collection) in the README for how roots are found.
+The collector is precise, sliding, and mark-compact. It traces from every reference reachable in a frame or on the operand stack, so cycles are reclaimed. Survivors are then slid together and every reference rewritten to follow them, which means there is no fragmentation and allocation is always a bump. See [Garbage collection](README.md#garbage-collection) in the README for how roots are found and why moving is safe.
 
 ### Heap: `alloc` / `heap_load` / `heap_store`
 
@@ -540,6 +540,7 @@ println(heap_load(p));   // 1234
 - The heap is 64 KiB and collected automatically. There is no `free`: drop the last reference to an object and the collector reclaims it. Exhausting the heap with live objects is still a runtime error (`Heap out of memory`).
 - Addresses are byte offsets; a word occupies two of them, so consecutive words are at `p`, `p + 2`, `p + 4`, ...
 - Word accesses are bounds-checked against the heap, but nothing checks that an address belongs to the allocation you think it does.
+- A collection moves objects, so the numeric value of a `heapptr` can change between one statement and the next. The collector rewrites every reference it can reach, including one pointing into the middle of a block, so this is invisible to a program — there is no way to observe an address as an integer.
 - A `heapptr` cannot be passed to `load16` / `store16` / `memcpy` / `memset`, and a `ptr` cannot be passed to `heap_load` / `heap_store`. The type checker rejects both.
 - `null` is a `heapptr` literal equal to heap address 0. Address 0 is reserved, so no allocation returns it.
 - `heap_load(null)` or `heap_store(null, ...)` raises `Null pointer dereference`.
@@ -574,6 +575,6 @@ println(ct_select(0, a, b));   // 20
 - `int` is the only numeric type: 16-bit, signed, wrapping.
 - Comparing `str` values compares content. Ordering is lexicographic by byte, with no case folding, so `"Z" < "a"` is `true`.
 - No methods, no arrays of structs, and no array-typed struct fields.
-- The collector never moves an object, so a heap with enough free bytes can still fail to place one if they are not contiguous.
+- The collector compacts, so there is no fragmentation: every free byte is usable no matter how scattered the garbage was. Objects move, but a `heapptr` is rewritten to follow its object, so it stays valid.
 - A variable that is dead but still in scope keeps its object alive until its function returns.
 - No escape sequences in string literals.

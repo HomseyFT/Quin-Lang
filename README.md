@@ -75,7 +75,7 @@ Compile and runtime errors exit 1, which a program returning 1 cannot be disting
 python3 -m unittest discover -s tests -t .
 ```
 
-446 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+458 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -371,7 +371,9 @@ What is still on you: a `ptr` only makes sense inside the frame that produced it
 
 ### Garbage collection
 
-The heap is collected by a precise, non-moving mark-sweep collector. Objects are never moved, so a reference stays valid for as long as the program holds it.
+The heap is collected by a precise, sliding **mark-compact** collector. After marking, surviving objects are slid down into the space the dead vacated and every reference is rewritten to follow them, so the free memory is always one contiguous run above the allocation pointer.
+
+That is what makes allocation a bump pointer and nothing more: there is no free list, no first-fit search, and no fragmentation. A program can always use every free byte, however scattered the garbage was.
 
 ```quin
 fn make_garbage(): void {
@@ -401,12 +403,20 @@ The operand stack is a flat list of words with no types attached, and guessing i
 
 A reference may point into the middle of a block, because `heapptr + int` is allowed. The collector resolves such a pointer to the block containing it, and that block stays alive.
 
-**Sweeping.** The heap is walked in address order — every object knows its own size, so this is always possible — and unmarked blocks are freed. Adjacent free blocks are merged into one, so repeated allocate-and-drop cycles do not shred the heap into unusable slivers. Allocation takes the first free block that fits, splitting it when the remainder is worth keeping, and otherwise extends the heap.
+**Moving.** Once marking is done the collector makes three more passes over the heap, which it can walk in address order because every object records its own size:
+
+1. **Plan** — walk the live objects and work out where each will sit once the gaps are closed, building a map from old address to new. The map is an ordinary Python dict rather than forwarding words written into the heap; a collector living inside the memory it manages could not afford that, and this one can.
+2. **Update** — rewrite every reference through the map, in all four places marking visits: the current frame, suspended frames, the operand stack, and reference fields inside live objects. A reference that points into the *middle* of an object keeps its offset, since `heapptr + int` is allowed. This happens before anything moves, so by the time objects are copied their contents are already correct.
+3. **Move** — copy each survivor down. Blocks are processed in ascending order and only ever move downward, so a destination always lies below every block still to be copied and cannot overwrite one.
+
+The reclaimed space is then zeroed. Sliding an object down leaves its old bytes intact, so a reference the collector failed to update would still read a perfectly good copy of the object and return the right answer — a bug that only appears much later, when that memory is handed out again. Wiping it turns that into an immediate null dereference.
+
+**Why moving is safe here.** Every reference the program can reach is known exactly: the compiler's stack maps say which frame slots hold one, and the VM tags the operand stack as it pushes. Just as importantly, no QuinLang expression can turn a reference into an `int` — neither `heapptr - heapptr` nor address-of on a reference exists — so a program cannot be holding a copy of an address that the collector does not know to update. Those two restrictions were added for exactly this reason.
 
 Two things worth knowing:
 
 - The stack map is per function, not per instruction. A variable that is dead but still occupies its slot keeps its object alive until the function returns. This is what lets the map be computed without liveness analysis: locals start at zero and address 0 is null, so a slot read before its first assignment is simply skipped.
-- Nothing is compacted, so a heap can hold enough free bytes for an object and still fail to place it if they are not contiguous.
+- Object addresses are stable between collections but not across one. Nothing in the language can observe this, since a reference can never be converted to an integer.
 
 ### Inline bytecode
 
@@ -533,12 +543,12 @@ python3 -m tests.update_golden
 
 - Array indexing is bounds-checked at compile time for constant indices and at run time for computed indices; `array_push` / `array_pop` are **not** bounds-checked, so an in-frame overrun silently hits a neighboring local.
 - A `ptr` does not outlive the frame it points into.
-- Collection is triggered only by allocation pressure or an explicit `gc()`, and it never moves an object.
+- Collection is triggered only by allocation pressure or an explicit `gc()`. Every collection moves every surviving object that has somewhere lower to go.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
 - Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
 - The process exit code carries only the low byte of `main`'s return value, and 1 collides with the error exit code.
 - `vm_asm` blocks are not checked for stack balance until run time.
 
-Future directions: a compacting collector to remove fragmentation and shorten the window in which a dead-but-in-scope variable retains an object, then a debugger, and filling out `std/`.
+Future directions: releasing a reference slot when its variable goes out of scope, so a dead-but-in-scope variable stops retaining its object until the function returns, then a debugger, and filling out `std/`.
 
 The goal is to keep the compiler and VM small enough to read in one sitting and see exactly how each language feature works end to end.

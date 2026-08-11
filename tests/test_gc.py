@@ -10,7 +10,9 @@ import io
 import unittest
 from contextlib import redirect_stdout
 
-from runtime.vm import QuinVM, KIND_FREE, KIND_RAW, HEADER_BYTES
+from runtime.vm import (
+    QuinVM, KIND_RAW, KIND_STRUCT, HEADER_BYTES, HEAP_START,
+)
 from tests.harness import QuinTestCase, compile_source
 
 
@@ -408,28 +410,199 @@ class TestRawBlocks(QuinTestCase):
         )
 
 
-class TestFreeList(QuinTestCase):
-    def test_adjacent_free_blocks_coalesce(self):
-        vm, _ = run_and_inspect(
-            "struct Big { a: int, b: int, c: int, d: int }\n"
-            "struct Small { v: int }\n"
+class TestCompaction(QuinTestCase):
+    """Live objects slide down; every reference follows them."""
+
+    def test_a_fragmented_heap_can_still_place_a_large_object(self):
+        # The case a non-moving collector cannot win. Live 8-byte nodes are
+        # interleaved with dead 36-byte blocks, so after collection the free
+        # space is a few hundred holes with a live node between each pair --
+        # tens of kilobytes free, no hole bigger than 32 bytes. Sliding the
+        # survivors together turns all of it into one usable run.
+        self.assertPrints(
+            "struct Node { v: int, next: Node }\n"
+            "struct Big { a:int,b:int,c:int,d:int,e:int,f:int,g:int,h:int,"
+            " i:int,j:int,k:int,l:int,m:int,n:int,o:int,p:int }\n"
+            "struct Huge { a:int,b:int,c:int,d:int,e:int,f:int,g:int,h:int,"
+            " i:int,j:int,k:int,l:int,m:int,n:int,o:int,p:int,"
+            " q:int,r:int,s:int,t:int,u:int,v:int,w:int,x:int,"
+            " y:int,z:int,aa:int,ab:int,ac:int,ad:int,ae:int,af:int }\n"
             """
-            fn drop(): void { let junk: Big = Big { a: 1, b: 2, c: 3, d: 4 }; }
             fn main(): int {
-                let keep: Small = Small { v: 1 };
+                let head: Node = null;
+                for (let i = 0; i < 1500; i = i + 1) {
+                    let dead: Big = Big { a:0,b:0,c:0,d:0,e:0,f:0,g:0,h:0,
+                                          i:0,j:0,k:0,l:0,m:0,n:0,o:0,p:0 };
+                    head = Node { v: i, next: head };
+                }
+                let big: Huge = Huge { a:1,b:0,c:0,d:0,e:0,f:0,g:0,h:0,
+                                       i:0,j:0,k:0,l:0,m:0,n:0,o:0,p:0,
+                                       q:0,r:0,s:0,t:0,u:0,v:0,w:0,x:0,
+                                       y:0,z:0,aa:0,ab:0,ac:0,ad:0,ae:0,af:0 };
+                println(big.a);
+                println(head.v);
+                return 0;
+            }
+            """,
+            "1", "1499",
+        )
+
+    def test_objects_move_and_references_follow(self):
+        vm, out = run_and_inspect(
+            NODE +
+            """
+            fn drop(): void { let junk: Node = Node { value: 1, next: null }; }
+            fn main(): int {
                 let i: int;
-                while (i < 40) { drop(); i = i + 1; }
+                while (i < 20) { drop(); i = i + 1; }
+                let keep: Node = Node { value: 77, next: null };
                 gc();
-                println(keep.v);
+                println(keep.value);
                 return 0;
             }
             """
         )
-        # 40 dead blocks in a row become one, not 40.
-        self.assertLessEqual(len(vm.free_blocks()), 1,
-                             f"expected coalescing, got {vm.free_blocks()}")
+        self.assertEqual(out.strip(), "77")
+        self.assertGreater(vm.stats.objects_moved, 0, "the survivor should have moved")
+        # It landed at the bottom of the heap, and its local still names it.
+        keep_slot = next(f for f in vm.functions if f.name == "main").ref_slots[0]
+        self.assertEqual(vm.locals[keep_slot], HEAP_START + HEADER_BYTES)
+        self.assertEqual(vm._read_word(vm.locals[keep_slot]), 77)
 
-    def test_a_freed_block_is_reused_for_a_later_object(self):
+    def test_compaction_leaves_no_gaps(self):
+        vm, _ = run_and_inspect(
+            NODE +
+            """
+            fn drop(): void { let junk: Node = Node { value: 1, next: null }; }
+            fn main(): int {
+                let a: Node = Node { value: 1, next: null };
+                drop();
+                let b: Node = Node { value: 2, next: null };
+                drop();
+                let c: Node = Node { value: 3, next: null };
+                gc();
+                return 0;
+            }
+            """
+        )
+        blocks = list(vm._blocks())
+        self.assertEqual(len(blocks), 3, "only the three survivors remain")
+        self.assertEqual(blocks[0], HEAP_START)
+        for x, y in zip(blocks, blocks[1:]):
+            self.assertEqual(vm._block_end(x), y, "survivors must be contiguous")
+        self.assertEqual(vm._block_end(blocks[-1]), vm.heap_ptr)
+
+    def test_the_heap_shrinks_to_the_live_data(self):
+        vm, _ = run_and_inspect(
+            NODE +
+            """
+            fn drop(): void { let junk: Node = Node { value: 1, next: null }; }
+            fn main(): int {
+                let keep: Node = Node { value: 7, next: null };
+                let i: int;
+                while (i < 200) { drop(); i = i + 1; }
+                gc();
+                return 0;
+            }
+            """
+        )
+        self.assertEqual(vm.heap_in_use(), 8, "only 'keep' survives")
+        self.assertEqual(vm.heap_ptr, HEAP_START + 8)
+
+    def test_a_linked_list_survives_being_moved(self):
+        # Every next pointer has to be rewritten, not just the head.
+        self.assertPrints(
+            NODE +
+            """
+            fn sum(head: Node): int {
+                let total: int = 0;
+                let cur: Node = head;
+                while (cur != null) { total = total + cur.value; cur = cur.next; }
+                return total;
+            }
+            fn drop(): void { let junk: Node = Node { value: 0, next: null }; }
+            fn main(): int {
+                let head: Node = null;
+                for (let i = 1; i < 21; i = i + 1) {
+                    head = Node { value: i, next: head };
+                    drop();
+                }
+                gc();
+                println(sum(head));
+                return 0;
+            }
+            """,
+            "210",
+        )
+
+    def test_an_interior_pointer_follows_its_object(self):
+        vm, out = run_and_inspect(
+            """
+            fn drop(): void { let junk: heapptr = alloc(8); }
+            fn main(): int {
+                let i: int;
+                while (i < 20) { drop(); i = i + 1; }
+                let base: heapptr = alloc(8);
+                let inside: heapptr = base + 6;
+                heap_store(inside, 88);
+                gc();
+                println(heap_load(inside));
+                return 0;
+            }
+            """
+        )
+        self.assertEqual(out.strip(), "88")
+        self.assertGreater(vm.stats.objects_moved, 0)
+        # inside must still sit six bytes into base after both moved.
+        self.assertEqual(vm.locals[1], vm.locals[2] - 6)
+
+    def test_references_on_the_operand_stack_are_rewritten(self):
+        # The outer object is mid-construction, held only on the operand
+        # stack, when a collection moves it.
+        #
+        # The garbage has to be allocated BEFORE the outer object, so that
+        # collecting it leaves a hole underneath and the outer object really
+        # slides. Allocate it afterwards and the outer object is already at the
+        # bottom of the heap, nothing moves, and the test passes even when
+        # operand-stack references are never rewritten.
+        source = NODE + """
+            fn drop(): void { let junk: Node = Node { value: 0, next: null }; }
+            fn inner(): Node { gc(); return Node { value: 9, next: null }; }
+            fn main(): int {
+                let i: int;
+                while (i < 20) { drop(); i = i + 1; }
+                let n: Node = Node { value: 7, next: inner() };
+                println(n.value);
+                println(n.next.value);
+                return 0;
+            }
+            """
+        self.assertPrints(source, "7", "9")
+        vm, _ = run_and_inspect(source)
+        self.assertGreater(vm.stats.objects_moved, 0,
+                           "nothing moved, so this proves nothing about rewriting")
+
+    def test_a_suspended_frames_references_are_rewritten(self):
+        # Same shape: the garbage goes underneath 'n' so that collecting it
+        # forces n to move while outer()'s frame is suspended.
+        source = NODE + """
+            fn drop(): void { let junk: Node = Node { value: 0, next: null }; }
+            fn inner(): int { gc(); return 1; }
+            fn outer(held: Node): int { return held.value + inner(); }
+            fn main(): int {
+                let i: int;
+                while (i < 20) { drop(); i = i + 1; }
+                let n: Node = Node { value: 41, next: null };
+                println(outer(n));
+                return 0;
+            }
+            """
+        self.assertPrints(source, "42")
+        vm, _ = run_and_inspect(source)
+        self.assertGreater(vm.stats.objects_moved, 0,
+                           "nothing moved, so this proves nothing about rewriting")
+
+    def test_allocation_reuses_the_reclaimed_space(self):
         vm, out = run_and_inspect(
             NODE +
             """
@@ -444,26 +617,46 @@ class TestFreeList(QuinTestCase):
             """
         )
         self.assertEqual(out.strip(), "5")
-        # One node's worth of heap, not two: the second reused the first's space.
-        self.assertEqual(vm.heap_in_use(), 8)
+        self.assertEqual(vm.heap_in_use(), 8, "one node's worth, not two")
 
-    def test_a_large_object_can_use_a_coalesced_run(self):
-        self.assertPrints(
-            "struct Small { v: int }\n"
-            "struct Big { a: int, b: int, c: int, d: int, e: int, f: int }\n"
+    def test_an_object_that_dies_after_surviving_is_still_collected(self):
+        # A mark left set from an earlier cycle would make this object look
+        # live forever, so it would never be reclaimed no matter how many
+        # collections ran.
+        vm, _ = run_and_inspect(
+            NODE +
             """
-            fn drop(): void { let junk: Small = Small { v: 1 }; }
             fn main(): int {
-                let i: int;
-                while (i < 20) { drop(); i = i + 1; }
+                let keep: Node = Node { value: 1, next: null };
                 gc();
-                let big: Big = Big { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6 };
-                println(big.f);
+                keep = null;
+                gc();
                 return 0;
             }
-            """,
-            "6",
+            """
         )
+        self.assertEqual(vm.stats.collections, 2)
+        self.assertEqual(vm.heap_in_use(), 0,
+                         "an object marked in one cycle must not stay marked into the next")
+
+    def test_vacated_memory_is_wiped(self):
+        # So that a reference the collector failed to update faults instead of
+        # reading an intact copy of the object it used to name.
+        vm, _ = run_and_inspect(
+            NODE +
+            """
+            fn drop(): void { let junk: Node = Node { value: 4242, next: null }; }
+            fn main(): int {
+                let i: int;
+                while (i < 10) { drop(); i = i + 1; }
+                gc();
+                return 0;
+            }
+            """
+        )
+        self.assertEqual(vm.heap_in_use(), 0)
+        tail = vm.heap[vm.heap_ptr:vm.heap_ptr + 128]
+        self.assertEqual(set(tail), {0}, "reclaimed memory should not keep its contents")
 
     def test_the_heap_stays_consistent_across_many_cycles(self):
         vm, out = run_and_inspect(
@@ -484,9 +677,8 @@ class TestFreeList(QuinTestCase):
         self.assertEqual(out.strip(), "7")
         self.assertEqual(vm.stats.collections, 30)
         self.assertEqual(vm.heap_in_use(), 8, "only 'keep' should remain")
-        # Every block in the heap must still parse.
         for hdr in vm._blocks():
-            self.assertIn(vm._kind(hdr), (0, KIND_RAW, KIND_FREE))
+            self.assertIn(vm._kind(hdr), (KIND_STRUCT, KIND_RAW))
 
 
 class TestOperandStackTagging(QuinTestCase):
@@ -588,6 +780,115 @@ class TestOperandStackTagging(QuinTestCase):
             """
         )
         self.assertEqual(len(vm.stack), len(vm.stack_is_ref))
+
+
+class TestHeapIntegrity(QuinTestCase):
+    """The block chain must stay walkable, whatever the allocation pattern.
+
+    Every heap walk depends on each block recording its own extent: sweeping,
+    measuring what is in use, and resolving a reference to the object holding
+    it. A block whose recorded size disagrees with the space it occupies
+    desynchronises the walk, and the next header read is object data.
+    """
+
+    def assertHeapTiles(self, vm):
+        """Every byte from HEAP_START to heap_ptr is in exactly one block."""
+        blocks = list(vm._blocks())
+        if not blocks:
+            self.assertEqual(vm.heap_ptr, HEAP_START)
+            return
+        self.assertEqual(blocks[0], HEAP_START, "the walk must start at the heap base")
+        for a, b in zip(blocks, blocks[1:]):
+            self.assertEqual(vm._block_end(a), b, "blocks must be contiguous")
+        self.assertEqual(vm._block_end(blocks[-1]), vm.heap_ptr,
+                         "the last block must end exactly at the heap top")
+
+    def test_the_chain_tiles_the_heap_after_mixed_allocation(self):
+        # Objects of several sizes, some surviving and some not. A block whose
+        # recorded size disagreed with the space it occupies would desynchronise
+        # the walk here, and the next header read would be object data.
+        vm, _ = run_and_inspect(
+            "struct A { a: int }\n"
+            "struct B { a: int, b: int, c: int }\n"
+            "struct C { a: int, b: int, c: int, d: int, e: int, f: int, g: int }\n"
+            """
+            fn main(): int {
+                let keep: B = B { a: 1, b: 2, c: 3 };
+                for (let i = 0; i < 60; i = i + 1) {
+                    let x: A = A { a: 1 };
+                    let y: C = C { a:1,b:2,c:3,d:4,e:5,f:6,g:7 };
+                }
+                gc();
+                println(keep.b);
+                return 0;
+            }
+            """
+        )
+        self.assertHeapTiles(vm)
+
+    def test_the_chain_tiles_the_heap_across_repeated_collections(self):
+        vm, _ = run_and_inspect(
+            NODE +
+            """
+            fn drop(): void { let junk: Node = Node { value: 1, next: null }; }
+            fn main(): int {
+                let keep: Node = Node { value: 1, next: null };
+                for (let r = 0; r < 10; r = r + 1) {
+                    for (let i = 0; i < 15; i = i + 1) { drop(); }
+                    gc();
+                }
+                return 0;
+            }
+            """
+        )
+        self.assertHeapTiles(vm)
+
+    def test_fragmenting_allocation_keeps_the_heap_walkable(self):
+        # Interleaving live and dead objects of different sizes produces the
+        # free-block sizes that trigger the stranding case.
+        vm, out = run_and_inspect(
+            "struct Node { v: int, next: Node }\n"
+            "struct Big { a: int, b: int, c: int, d: int, e: int, f: int,"
+            " g: int, h: int, i: int, j: int, k: int, l: int }\n"
+            """
+            fn main(): int {
+                let head: Node = null;
+                for (let i = 0; i < 1200; i = i + 1) {
+                    let dead: Big = Big { a:0,b:0,c:0,d:0,e:0,f:0,
+                                          g:0,h:0,i:0,j:0,k:0,l:0 };
+                    head = Node { v: i, next: head };
+                }
+                println(head.v);
+                return 0;
+            }
+            """
+        )
+        self.assertEqual(out.strip(), "1199")
+        self.assertHeapTiles(vm)
+
+    def test_the_live_list_is_intact_after_heavy_recycling(self):
+        self.assertPrints(
+            "struct Node { v: int, next: Node }\n"
+            "struct Big { a: int, b: int, c: int, d: int, e: int }\n"
+            """
+            fn length(head: Node): int {
+                let n: int = 0;
+                let cur: Node = head;
+                while (cur != null) { n = n + 1; cur = cur.next; }
+                return n;
+            }
+            fn main(): int {
+                let head: Node = null;
+                for (let i = 0; i < 900; i = i + 1) {
+                    let dead: Big = Big { a:0, b:0, c:0, d:0, e:0 };
+                    head = Node { v: i, next: head };
+                }
+                println(length(head));
+                return 0;
+            }
+            """,
+            "900",
+        )
 
 
 class TestGcBuiltin(QuinTestCase):
