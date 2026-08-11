@@ -48,7 +48,7 @@ A larger tour of arrays, pointers, printing, and boolean logic:
 python3 -m compiler.driver_vm examples/hello.ql
 ```
 
-Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
+Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
 
 Note that `main`'s return value is computed by the VM but **not** propagated to the process exit code — the driver always exits 0 on a successful run.
 
@@ -58,7 +58,7 @@ Note that `main`'s return value is computed by the VM but **not** propagated to 
 python3 -m unittest discover -s tests -t .
 ```
 
-360 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+407 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -335,13 +335,13 @@ heap_store(h, 1234);
 println(heap_load(h)); // 1234
 ```
 
-The allocator is a bump pointer with no `free`, and it runs out at 64 KiB.
+Memory is reclaimed by a garbage collector, so dropping a reference makes its object reusable. See [Garbage collection](#garbage-collection).
 
 `null` is a reference literal equal to heap address 0, and initializes any `heapptr` or struct type. Address 0 is reserved, so no allocation returns it. `heap_load(null)` or `heap_store(null, ...)` raises `Null pointer dereference`. `heapptr + int` and `heapptr - int` give a `heapptr`.
 
 `heapptr - heapptr` is deliberately **not** an operation. It was the only expression that yielded a reference's numeric value as an `int`, which would let a program stash an address inside an untyped block where a collector does not look and reconstruct it later. Removing it is what lets untyped blocks be treated as containing no references.
 
-Every heap allocation carries a one-word header just below the address the program holds: a struct type id, or a tagged byte size for an untyped block from `alloc`. Nothing reads it yet — it is there so a collector can recover an object's size and which of its words are references.
+Every heap allocation carries a two-word header just below the address the program holds: the object's kind plus the collector's mark bit, and either a struct type id or a byte size. The collector reads it to recover an object's size and which of its words are references, and it makes the heap parseable end to end.
 
 Crossing the two is a compile error rather than a silent misread:
 
@@ -351,6 +351,45 @@ heap_load(@x);      // Argument type mismatch: expected heapptr, got ptr
 ```
 
 What is still on you: a `ptr` only makes sense inside the frame that produced it. Returning `@x` and dereferencing it in the caller reads whatever local occupies that slot, or faults with `Local index out of range` if the caller's frame is smaller.
+
+### Garbage collection
+
+The heap is collected by a precise, non-moving mark-sweep collector. Objects are never moved, so a reference stays valid for as long as the program holds it.
+
+```quin
+fn make_garbage(): void {
+    let junk: Node = Node { value: 1, next: null };
+}
+
+fn main(): int {
+    // 40000 nodes through a heap that holds about 8000. Nothing retains
+    // them, so the program completes rather than running out of memory.
+    for (let i = 0; i < 40000; i = i + 1) {
+        make_garbage();
+    }
+    return 0;
+}
+```
+
+Collection runs when an allocation cannot be satisfied; the allocation is then retried once, and only fails if the collection did not free enough. `gc()` forces a cycle at a point of your choosing.
+
+**Finding the roots.** A collector has to know every reference the program can still reach. Two of those places are easy, and one is not:
+
+- Each frame's locals, via the stack map the compiler emits (`ref_slots`). Suspended callers count too, so a frame that is waiting on a call still protects its objects.
+- The operand stack, which is the awkward one. Building `Node { value: 1, next: Node { ... } }` leaves the outer object on the operand stack and in no variable at all while the inner one allocates. A collector that scanned only locals would free an object that is about to be used.
+
+The operand stack is a flat list of words with no types attached, and guessing is not an option: heap addresses and `int` both span the full 0–65535 range, so no value can be recognised as a pointer by looking at it. The VM therefore tracks a reference flag beside every operand-stack entry, set as each value is pushed — `ALLOC` pushes a reference, `PUSH_INT` does not, `DUP` copies the flag, and a field load consults the object's header to see whether that field is a reference.
+
+**Tracing.** From each root the collector marks the object, and for a struct follows the reference fields named by its `ref_offsets`. Blocks from `alloc` are kept alive but never traced through: nothing in the language can place a reference inside one, which is precisely what dropping `heapptr - heapptr` and address-of on references bought. Cycles are collected, since reachability is what matters rather than a count.
+
+A reference may point into the middle of a block, because `heapptr + int` is allowed. The collector resolves such a pointer to the block containing it, and that block stays alive.
+
+**Sweeping.** The heap is walked in address order — every object knows its own size, so this is always possible — and unmarked blocks are freed. Adjacent free blocks are merged into one, so repeated allocate-and-drop cycles do not shred the heap into unusable slivers. Allocation takes the first free block that fits, splitting it when the remainder is worth keeping, and otherwise extends the heap.
+
+Two things worth knowing:
+
+- The stack map is per function, not per instruction. A variable that is dead but still occupies its slot keeps its object alive until the function returns. This is what lets the map be computed without liveness analysis: locals start at zero and address 0 is null, so a slot read before its first assignment is simply skipped.
+- Nothing is compacted, so a heap can hold enough free bytes for an object and still fail to place it if they are not contiguous.
 
 ### Inline bytecode
 
@@ -378,7 +417,7 @@ Names inside the block resolve against the scope at that point, including shadow
 3. **Include resolution** (`compiler/resolver.py`) — recursively parses included files, detects cycles, and merges everything into one `Program`.
 4. **Semantic analysis** (`compiler/sema.py`) — struct layouts, scopes, name resolution, the entry-point contract, the array restrictions, return checking, and a type for every expression node.
 5. **Code generation** (`compiler/codegen_vm.py`) — the typed AST to bytecode.
-6. **Execution** (`runtime/vm.py`) — the interpreter runs the bytecode.
+6. **Execution** (`runtime/vm.py`) — the interpreter runs the bytecode and collects the heap.
 
 ### What sema hands to codegen
 
@@ -390,7 +429,7 @@ Names inside the block resolve against the scope at that point, including shadow
 - `asm_scope` — the names visible at each `vm_asm` block, since its body is raw text that no other pass resolves.
 - `structs` — each struct's field layout and its heap type id.
 
-Two of these outlive the compiler. Codegen turns `structs` into a table the VM carries, giving each object's size and the word offsets of its reference fields; and it turns `frame_symbols` into a per-function **stack map** of which local slots hold references. Together they are what a collector needs to find its roots and trace through the heap. Nothing reads them yet.
+Two of these outlive the compiler. Codegen turns `structs` into a table the VM carries, giving each object's size and the word offsets of its reference fields; and it turns `frame_symbols` into a per-function **stack map** of which local slots hold references. Together they are what the collector uses to find its roots and trace through the heap.
 
 The stack map can be per-function rather than per-instruction because locals start at zero and address 0 is reserved for null, so a slot read before its first assignment is simply skipped — no liveness analysis required.
 
@@ -406,7 +445,7 @@ Codegen never walks scopes. It turns `frame_symbols` into slots and then looks u
 - Logic and control flow: `NOT`, `JMP`, `JZ`, `JNZ`
 - Calls: `CALL`, `RET`
 - Frame-relative pointers: `LOAD_INDIRECT`, `STORE_INDIRECT`, `MEMCPY_LOCALS`, `MEMSET_LOCALS`
-- Heap: `ALLOC`, `HEAP_LOAD`, `HEAP_STORE`
+- Heap: `ALLOC`, `ALLOC_TYPED`, `HEAP_LOAD`, `HEAP_STORE`, `HEAP_LOAD_FIELD`, `HEAP_STORE_FIELD`, `GC`
 - I/O: `PRINT_INT`, `PRINT_STR`, `PRINTLN_INT`, `PRINTLN_STR`
 
 Calling convention: arguments are pushed left to right and consumed by `CALL` into the callee's leading locals. **Every** function pushes exactly one return value — void functions and void builtins push a dummy `0` that the caller pops — so `RET` is uniform. Each frame records the operand-stack height at entry, and `RET` verifies the balance, which turns a codegen bug into an immediate `Unbalanced operand stack at RET` instead of silent corruption.
@@ -433,6 +472,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_runtime.py` | 16-bit arithmetic, control flow, calling convention, VM faults |
 | `tests/test_resolver.py` | Include paths, cycles, diamonds, duplicate definitions |
 | `tests/test_structs.py` | Struct declaration, literals, fields, references, null, object layout |
+| `tests/test_gc.py` | What the collector reclaims, what it must not, and operand-stack tagging |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 
 Tests are written as QuinLang source strings and asserted on their output or their error message, so they exercise the whole pipeline rather than one pass:
@@ -475,12 +515,12 @@ python3 -m tests.update_golden
 
 - Array indexing is bounds-checked at compile time for constant indices and at run time for computed indices; `array_push` / `array_pop` are **not** bounds-checked, so an in-frame overrun silently hits a neighboring local.
 - A `ptr` does not outlive the frame it points into.
-- The heap is a bump allocator with no `free`.
+- Collection is triggered only by allocation pressure or an explicit `gc()`, and it never moves an object.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
 - Comparing `str` values compares interned ids, so `==` and `!=` behave sensibly but `<` / `>` are meaningless (`"b" < "a"` is `true`).
 - `main`'s return value never reaches the process exit code.
 - `vm_asm` blocks are not checked for stack balance until run time.
 
-Future directions: a garbage collector (the object headers and stack maps it needs are already emitted), restricting relational operators to `int`, and filling out `std/`.
+Future directions: restricting relational operators to `int`, a compacting collector to remove fragmentation, and filling out `std/`.
 
 The goal is to keep the compiler and VM small enough to read in one sitting and see exactly how each language feature works end to end.

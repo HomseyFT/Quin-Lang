@@ -420,6 +420,14 @@ A `ptr` is an **index into the current frame's locals**, not a machine address. 
 - Pointers are only meaningful inside the frame that created them. Returning `@x` and dereferencing it in the caller reads an unrelated slot, or faults if the caller's frame is smaller.
 - `memcpy` / `memset` counts are in **slots (16-bit words)**, not bytes.
 - Heap addresses are a *separate* address space with its own type, `heapptr`. Mixing the two is a compile error, not a silent misread: `load16(alloc(2))` and `heap_load(@x)` are both rejected.
+- `@` does **not** apply to a variable holding a reference — a `heapptr` or a struct:
+
+  ```quin
+  let h: heapptr = alloc(4);
+  let p: ptr = @h;      // error: cannot take the address of 'h'
+  ```
+
+  A frame pointer to a reference slot would let `load16` read the address out as an `int` and `store16` put one back, which is the last way to hide a reference from the garbage collector. Address-of on `int` and `bool` variables and on array elements is unaffected.
 
 ### Function calls
 
@@ -446,6 +454,7 @@ Always available and lowered directly by the compiler; they cannot be shadowed b
 | `alloc(size: int): heapptr` | Bump-allocate `size` bytes on the heap. |
 | `heap_load(p: heapptr): int` | Read the word at heap address `p`. |
 | `heap_store(p: heapptr, value: int): void` | Write `value` at heap address `p`. |
+| `gc(): void` | Force a garbage collection. |
 | `ct_eq(a: int, b: int): bool` | Equality, intended to be branchless. |
 | `ct_select(mask: int, x: int, y: int): int` | `x` when `mask` is 1, else `y`. |
 
@@ -502,6 +511,16 @@ println(dst[0]);               // 0
 
 Overlapping `memcpy` ranges are handled: the copy runs back to front when the destination is above the source. A negative `count` is a runtime error; an overlong one silently walks into neighboring locals until it leaves the frame.
 
+### `gc`
+
+```quin
+gc();
+```
+
+Forces a garbage collection. Collection also happens on its own whenever an allocation cannot be satisfied, so a program never needs to call this; it exists to make collection happen at a known point, which is useful in tests and when demonstrating the collector.
+
+The collector is precise, non-moving, and mark-sweep. It traces from every reference reachable in a frame or on the operand stack, so cycles are reclaimed and a reference stays valid for as long as it is held. See [Garbage collection](README.md#garbage-collection) in the README for how roots are found.
+
 ### Heap: `alloc` / `heap_load` / `heap_store`
 
 ```quin
@@ -512,14 +531,14 @@ heap_store(p, 1234);
 println(heap_load(p));   // 1234
 ```
 
-- The heap is 64 KiB and managed by a bump pointer. There is no `free` and no reuse; exhausting it is a runtime error (`Heap out of memory`).
+- The heap is 64 KiB and collected automatically. There is no `free`: drop the last reference to an object and the collector reclaims it. Exhausting the heap with live objects is still a runtime error (`Heap out of memory`).
 - Addresses are byte offsets; a word occupies two of them, so consecutive words are at `p`, `p + 2`, `p + 4`, ...
 - Word accesses are bounds-checked against the heap, but nothing checks that an address belongs to the allocation you think it does.
 - A `heapptr` cannot be passed to `load16` / `store16` / `memcpy` / `memset`, and a `ptr` cannot be passed to `heap_load` / `heap_store`. The type checker rejects both.
 - `null` is a `heapptr` literal equal to heap address 0. Address 0 is reserved, so no allocation returns it.
 - `heap_load(null)` or `heap_store(null, ...)` raises `Null pointer dereference`.
 - `heapptr + int` and `heapptr - int` give a `heapptr`. `heapptr - heapptr` is **not** allowed: it was the only expression that turned a reference into an `int`, and removing it is what lets a collector assume an untyped block holds no references.
-- Every allocation carries a one-word header below the returned address, recording the object's struct type id or, for `alloc`, a tagged byte size. `alloc` therefore consumes two bytes more than requested, and a single block may be at most 32766 bytes.
+- Every allocation carries a two-word header below the returned address: the object's kind and mark bit, then its struct type id or byte size. `alloc` therefore consumes four bytes more than requested, and the smallest block is four bytes of payload.
 
 ### `ct_eq` / `ct_select`
 
@@ -549,5 +568,6 @@ println(ct_select(0, a, b));   // 20
 - `int` is the only numeric type: 16-bit, signed, wrapping.
 - Comparing `str` values compares interned ids, so `==` and `!=` work as expected but `<` / `>` are meaningless (`"b" < "a"` is `true`).
 - No methods, no arrays of structs, and no array-typed struct fields.
-- The heap has no garbage collector yet; object headers and stack maps are emitted for one but nothing reclaims memory.
+- The collector never moves an object, so a heap with enough free bytes can still fail to place one if they are not contiguous.
+- A variable that is dead but still in scope keeps its object alive until its function returns.
 - No escape sequences in string literals.
