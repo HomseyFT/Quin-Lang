@@ -8,7 +8,7 @@ The language is intentionally small:
 
 - `int`, `bool`, `str`, `ptr`, `heapptr`, and fixed-size stack arrays `int[N]`
 - Functions with parameters, recursion, and `int` / `bool` / `str` / pointer / `void` returns
-- `if` / `else`, `while`
+- `if` / `else`, `while`, `for`, `break` / `continue`, and bare `{ ... }` blocks
 - Arithmetic (`+ - * / %`), comparisons, and short-circuit `&&` / `||`
 - `print` / `println` statements for `int`, `str`, and `bool`
 - Multi-file programs via `include`, plus a small `std/` library
@@ -47,7 +47,7 @@ A larger tour of arrays, pointers, printing, and boolean logic:
 python3 -m compiler.driver_vm examples/hello.ql
 ```
 
-Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
+Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
 
 Note that `main`'s return value is computed by the VM but **not** propagated to the process exit code — the driver always exits 0 on a successful run.
 
@@ -57,7 +57,7 @@ Note that `main`'s return value is computed by the VM but **not** propagated to 
 python3 -m unittest discover -s tests -t .
 ```
 
-215 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+287 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -146,9 +146,36 @@ if (x > 0) {
 while (i < 3) {
     i = i + 1;
 }
+
+for (let i = 0; i < 3; i = i + 1) {
+    println(i);
+}
 ```
 
-Blocks introduce a scope, so an inner `let` may shadow an outer one; redeclaring a name in the *same* scope is an error.
+Every `for` clause is optional. The init may be a `let` or an assignment, and `for (;;)` loops until something breaks out. The loop variable is scoped to the loop, so two loops in a row may both declare `i`.
+
+`break` leaves the innermost enclosing loop; `continue` skips to its next iteration. In a `for`, `continue` still runs the step clause, so the loop advances:
+
+```quin
+for (let i = 0; i < 6; i = i + 1) {
+    if (i == 4) { break; }
+    if (i == 1) { continue; }
+    println(i);              // 0 2 3
+}
+```
+
+Using either outside a loop is a compile error.
+
+Blocks introduce a scope, so an inner `let` may shadow an outer one; redeclaring a name in the *same* scope is an error. A bare block is a statement, useful when you want a scope and nothing else:
+
+```quin
+let x: int = 1;
+{
+    let x: int = 2;   // shadows the outer x
+    println(x);       // 2
+}
+println(x);           // 1
+```
 
 `print` and `println` are statements with call-like syntax (not functions you can pass around). They accept `int`, `str`, or `bool`; a `bool` prints as `true` / `false`:
 
@@ -385,6 +412,6 @@ python3 -m tests.update_golden
 - `main`'s return value never reaches the process exit code.
 - `vm_asm` blocks are not checked for stack balance until run time.
 
-Future directions: `for` loops and `break` / `continue`, restricting relational operators to `int`, structs, and filling out `std/`.
+Future directions: restricting relational operators to `int`, structs, a garbage collector, and filling out `std/`.
 
 The goal is to keep the compiler and VM small enough to read in one sitting and see exactly how each language feature works end to end.

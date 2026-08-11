@@ -6,7 +6,7 @@ The reference for QuinLang's surface syntax and built-ins. Programs are compiled
 
 - **Comments**: `// to end of line`. There are no block comments.
 - **Identifiers**: start with a letter or `_`, then letters, digits, or `_`.
-- **Keywords**: `fn let return if else while true false null int str void ptr heapptr print println vm_asm include`. These cannot be used as identifiers.
+- **Keywords**: `fn let return if else while for break continue true false null int str void ptr heapptr print println vm_asm include`. These cannot be used as identifiers.
 - **Integer literals**: decimal (`123`) or hexadecimal (`0xFF`, `0XFF`). A literal must fit in 16 bits (`0..65535`); larger values are a lex error. There are no negative literals — `-1` is the unary `-` operator applied to `1`.
 - **String literals**: `"..."`, delimited by double quotes, may span lines. There are **no escape sequences**: `\n` inside a string literal is a backslash followed by `n`.
 - **Whitespace** is insignificant.
@@ -49,7 +49,7 @@ fn name(param1: Type1, param2: Type2): ReturnType {
 - `: ReturnType` may be omitted, which makes the function `void`.
 - Parameters may not be array types (`int[N]`), and a function may not return an array type.
 - Functions may be called before their definition, and may recurse.
-- A non-void function must return on every path. The check is conservative: an `if` counts only when both branches return, and a `while` never counts because the body may not run.
+- A non-void function must return on every path. The check is conservative: an `if` counts only when both branches return, and a `while` or `for` never counts because the body may not run.
 - Redefining a function name is an error.
 
 The entry point must be named `main`, take no parameters, and return `int` or `void`:
@@ -172,7 +172,61 @@ while (condition) {
 }
 ```
 
-`condition` must have type `bool`. There is no `for`, `break`, or `continue`.
+`condition` must have type `bool`. Each body is its own scope.
+
+### For
+
+```quin
+for (let i: int = 0; i < 3; i = i + 1) {
+    println(i);
+}
+```
+
+The three clauses are init, condition, and step, separated by `;`. All are optional:
+
+```quin
+for (; i < 3; i = i + 1) { }   // no init
+for (let i = 0;; i = i + 1) { }   // no condition: loops until a break
+for (let i = 0; i < 3;) { }    // no step
+for (;;) { }                   // no clauses at all
+```
+
+- The init clause is a `let` declaration, an assignment, or an expression. A `let` here declares the loop variable in a scope that wraps the loop, so it is visible to the condition, step, and body, but not after the loop — two consecutive loops may each declare `i`.
+- The condition must have type `bool`, and an omitted condition means "always true".
+- The step clause is an assignment or an expression, with no trailing `;`.
+- The body is its own scope, nested inside the init's, so it may shadow the loop variable.
+- Braces are required, as with `if` and `while`.
+
+### Break and continue
+
+```quin
+break;
+continue;
+```
+
+`break` exits the innermost enclosing loop. `continue` skips the rest of the current iteration. Both work in `while` and `for`, and both bind to the innermost loop when loops are nested.
+
+In a `for` loop, `continue` jumps to the **step** clause, not to the condition, so the loop still advances:
+
+```quin
+for (let i = 0; i < 4; i = i + 1) {
+    if (i == 1) { continue; }
+    println(i);              // 0 2 3
+}
+```
+
+Using either outside a loop is a semantic error (`'break' outside of a loop`). A loop in another function does not count — the check is per function.
+
+### Block
+
+```quin
+{
+    let x: int = 2;
+    println(x);
+}
+```
+
+A bare `{ ... }` is a statement that introduces a scope and nothing else. Declarations inside it are not visible after it, and may shadow outer names. Blocks may nest.
 
 ### `vm_asm`
 
@@ -426,5 +480,5 @@ println(ct_select(0, a, b));   // 20
 - Pointers do not outlive the frame they point into.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
 - Comparing `str` values compares interned ids, so `==` and `!=` work as expected but `<` / `>` are meaningless (`"b" < "a"` is `true`).
-- No `for`, `break`, `continue`, block statements, structs, or user-defined types.
+- No structs or user-defined types.
 - No escape sequences in string literals.
