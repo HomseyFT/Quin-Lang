@@ -6,7 +6,7 @@ The reference for QuinLang's surface syntax and built-ins. Programs are compiled
 
 - **Comments**: `// to end of line`. There are no block comments.
 - **Identifiers**: start with a letter or `_`, then letters, digits, or `_`.
-- **Keywords**: `fn let return if else while for break continue true false null int str void ptr heapptr print println vm_asm include`. These cannot be used as identifiers.
+- **Keywords**: `fn let return if else while for break continue true false null int str void ptr heapptr print println vm_asm include struct`. These cannot be used as identifiers.
 - **Integer literals**: decimal (`123`) or hexadecimal (`0xFF`, `0XFF`). A literal must fit in 16 bits (`0..65535`); larger values are a lex error. There are no negative literals — `-1` is the unary `-` operator applied to `1`.
 - **String literals**: `"..."`, delimited by double quotes, may span lines. There are **no escape sequences**: `\n` inside a string literal is a backslash followed by `n`.
 - **Whitespace** is insignificant.
@@ -72,6 +72,7 @@ fn main(): void { }
 | `heapptr` | An address in the heap, produced by `alloc`. See [Heap](#heap-alloc--heap_load--heap_store). |
 | `void` | No value. Only valid as a return type. |
 | `int[N]` | Fixed-size array of `N` ints in the current frame. `N` must be a positive integer literal. |
+| a struct name | A reference to a heap object of that struct type. See [Structs](#structs). |
 
 `bool` is a distinct type, not an alias for `0`/`1`: conditions must be `bool`, `true + 1` is a type error, and `if (1)` is rejected with `If condition must be bool`.
 
@@ -259,6 +260,72 @@ The block is emitted verbatim with no verification that it leaves the operand st
 | `cmp_eq; cmp_ne; cmp_lt; cmp_le; cmp_gt; cmp_ge;` | Pop two, push `0` or `1`. |
 
 `NAME` must be a scalar local or parameter in scope; arrays are rejected — index them explicitly. Anything outside this table, including `mod`, is a codegen error. Note that this is a subset of the VM's opcodes; see [README.md](README.md#quinvm-bytecode) for the full set.
+
+## Structs
+
+```quin
+struct Point {
+    x: int,
+    y: int,
+}
+```
+
+A struct declaration is a top-level item, like a function. It may appear before or after the code that uses it, and it may come from an included file. A trailing comma after the last field is allowed.
+
+A struct value is a **reference to a heap object**, not the object itself. One word wide, like every other reference.
+
+- Fields are `name: Type` pairs. A field may be `int`, `bool`, `str`, `ptr`, `heapptr`, or another struct — including the struct being declared.
+- Field types resolve in a second pass, so self-reference and forward reference both work.
+- A field may not be an array (`int[N]`) or `void`.
+- A struct must declare at least one field.
+- Field names must be unique within a struct, and a struct name may not be redefined or shadow a built-in type.
+
+### Struct literals
+
+```quin
+let p: Point = Point { x: 3, y: 4 };
+let q = Point { y: 4, x: 3 };        // order is free; type is inferred
+```
+
+A literal allocates a new object. It must name **every** field exactly once; a missing, repeated, or unknown field is an error. Field values are evaluated in the order written.
+
+### Field access
+
+```quin
+println(p.x);
+p.y = 10;
+l.a.x = 9;          // chains
+```
+
+The object must be a struct, and the field must exist. Assigning to a field requires a matching type. Reading or writing a field through `null` is a runtime error (`Null pointer dereference`).
+
+### Reference semantics
+
+```quin
+let q: Point = p;   // q and p name the same object
+q.x = 99;
+println(p.x);       // 99
+```
+
+Consequences:
+
+- Passing a struct to a function passes the reference, so the callee can modify the caller's object.
+- `==` and `!=` compare **identity**, not field values: two literals with equal fields are not equal.
+- `<`, `<=`, `>`, `>=` do not apply to struct references or to `null`.
+- A struct has no printable form; `println(p)` is an error.
+- Structs may be parameters and return types, unlike arrays.
+
+### null
+
+`null` is a reference literal at heap address 0. It initializes any reference type — any struct, or `heapptr` — and an uninitialized struct variable is already `null`:
+
+```quin
+let n: Node;
+println(n == null);          // true
+let m: Node = null;          // explicit
+```
+
+`null` has no type of its own, so it cannot be inferred: `let x = null;` is an error. It is not assignable to `int` or `ptr`, and a `Point` is never assignable to a `Node`.
 
 ## Expressions
 
@@ -451,7 +518,8 @@ println(heap_load(p));   // 1234
 - A `heapptr` cannot be passed to `load16` / `store16` / `memcpy` / `memset`, and a `ptr` cannot be passed to `heap_load` / `heap_store`. The type checker rejects both.
 - `null` is a `heapptr` literal equal to heap address 0. Address 0 is reserved, so no allocation returns it.
 - `heap_load(null)` or `heap_store(null, ...)` raises `Null pointer dereference`.
-- `heapptr + int` and `heapptr - int` give a `heapptr`; `heapptr - heapptr` gives an `int` distance in bytes.
+- `heapptr + int` and `heapptr - int` give a `heapptr`. `heapptr - heapptr` is **not** allowed: it was the only expression that turned a reference into an `int`, and removing it is what lets a collector assume an untyped block holds no references.
+- Every allocation carries a one-word header below the returned address, recording the object's struct type id or, for `alloc`, a tagged byte size. `alloc` therefore consumes two bytes more than requested, and a single block may be at most 32766 bytes.
 
 ### `ct_eq` / `ct_select`
 
@@ -480,5 +548,6 @@ println(ct_select(0, a, b));   // 20
 - Pointers do not outlive the frame they point into.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
 - Comparing `str` values compares interned ids, so `==` and `!=` work as expected but `<` / `>` are meaningless (`"b" < "a"` is `true`).
-- No structs or user-defined types.
+- No methods, no arrays of structs, and no array-typed struct fields.
+- The heap has no garbage collector yet; object headers and stack maps are emitted for one but nothing reclaims memory.
 - No escape sequences in string literals.

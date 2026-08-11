@@ -7,6 +7,7 @@ It compiles to bytecode for **QuinVM**, a stack machine written in Python. The w
 The language is intentionally small:
 
 - `int`, `bool`, `str`, `ptr`, `heapptr`, and fixed-size stack arrays `int[N]`
+- `struct` types: heap-allocated objects with reference semantics, including self-referential ones
 - Functions with parameters, recursion, and `int` / `bool` / `str` / pointer / `void` returns
 - `if` / `else`, `while`, `for`, `break` / `continue`, and bare `{ ... }` blocks
 - Arithmetic (`+ - * / %`), comparisons, and short-circuit `&&` / `||`
@@ -47,7 +48,7 @@ A larger tour of arrays, pointers, printing, and boolean logic:
 python3 -m compiler.driver_vm examples/hello.ql
 ```
 
-Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
+Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
 
 Note that `main`'s return value is computed by the VM but **not** propagated to the process exit code — the driver always exits 0 on a successful run.
 
@@ -57,7 +58,7 @@ Note that `main`'s return value is computed by the VM but **not** propagated to 
 python3 -m unittest discover -s tests -t .
 ```
 
-287 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+360 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -97,6 +98,7 @@ This is a quick tour; [SYNTAX.md](SYNTAX.md) is the reference.
 - `heapptr` — an address in the heap, produced by `alloc`.
 - `void` — no value; only valid as a return type.
 - `int[N]` — a fixed-size array of `N` ints in the current frame, for a literal `N > 0`.
+- a `struct` name — a reference to a heap object. See [Structs](#structs).
 
 Arrays are deliberately second-class: they cannot be parameters, return types, initialized at declaration, assigned as a whole, or used as a value. They are zeroed at declaration and filled element by element.
 
@@ -240,6 +242,63 @@ println(v);                       // 20
 
 Both take the array by name — an arbitrary expression that happens to be an array won't work.
 
+### Structs
+
+A `struct` declares a heap object type. Declarations sit at the top level, beside functions, and may appear in any order relative to the code that uses them:
+
+```quin
+struct Point {
+    x: int,
+    y: int,
+}
+
+fn main(): int {
+    let p: Point = Point { x: 3, y: 4 };
+    println(p.x);      // 3
+    p.y = 10;
+    println(p.y);      // 10
+    return 0;
+}
+```
+
+A struct value is a **reference**, so assigning one does not copy the object:
+
+```quin
+let q: Point = p;
+q.x = 99;
+println(p.x);          // 99 — p and q are the same object
+```
+
+That is also why a function can modify its caller's object, and why `==` compares identity rather than field values.
+
+A field may be another struct, including the struct being declared. That is what makes linked structures work:
+
+```quin
+struct Node {
+    value: int,
+    next: Node,
+}
+
+let head: Node = null;
+for (let i = 1; i < 4; i = i + 1) {
+    head = Node { value: i, next: head };
+}
+println(head.value);        // 3
+println(head.next.value);   // 2
+```
+
+Field types are resolved in a second pass over the declarations, so a struct may name itself, name a struct declared later, or name one from an included file.
+
+An uninitialized struct variable is `null`, and reaching through a null reference is a runtime error rather than a silent misread:
+
+```quin
+let n: Node;
+println(n == null);    // true
+println(n.value);      // Runtime error: Null pointer dereference reading a field
+```
+
+Rules worth knowing: a literal must give every field exactly once, in any order; fields are read and written but a struct has no value form for `print`; relational operators (`<`, `>`, …) do not apply to references; and a struct cannot have array-typed or `void` fields.
+
 ### The two address spaces
 
 QuinLang has two kinds of memory, and they are **separate types** so that an address from one cannot be used with the other.
@@ -278,7 +337,11 @@ println(heap_load(h)); // 1234
 
 The allocator is a bump pointer with no `free`, and it runs out at 64 KiB.
 
-`null` is a `heapptr` literal equal to heap address 0. Address 0 is reserved, so no allocation returns it. `heap_load(null)` or `heap_store(null, ...)` raises `Null pointer dereference`. `heapptr + int` and `heapptr - int` give a `heapptr`; `heapptr - heapptr` gives an `int` distance in bytes.
+`null` is a reference literal equal to heap address 0, and initializes any `heapptr` or struct type. Address 0 is reserved, so no allocation returns it. `heap_load(null)` or `heap_store(null, ...)` raises `Null pointer dereference`. `heapptr + int` and `heapptr - int` give a `heapptr`.
+
+`heapptr - heapptr` is deliberately **not** an operation. It was the only expression that yielded a reference's numeric value as an `int`, which would let a program stash an address inside an untyped block where a collector does not look and reconstruct it later. Removing it is what lets untyped blocks be treated as containing no references.
+
+Every heap allocation carries a one-word header just below the address the program holds: a struct type id, or a tagged byte size for an untyped block from `alloc`. Nothing reads it yet — it is there so a collector can recover an object's size and which of its words are references.
 
 Crossing the two is a compile error rather than a silent misread:
 
@@ -313,7 +376,7 @@ Names inside the block resolve against the scope at that point, including shadow
 1. **Lexing** (`compiler/lexer.py`, `tokens.py`) — source text to tokens, with `//` comments, decimal and `0x` hex literals, and 16-bit range checks.
 2. **Parsing** (`compiler/parser.py`, `ast.py`) — recursive descent into an AST. Every node carries `line` / `col`.
 3. **Include resolution** (`compiler/resolver.py`) — recursively parses included files, detects cycles, and merges everything into one `Program`.
-4. **Semantic analysis** (`compiler/sema.py`) — scopes, name resolution, the entry-point contract, the array restrictions, return checking, and a type for every expression node.
+4. **Semantic analysis** (`compiler/sema.py`) — struct layouts, scopes, name resolution, the entry-point contract, the array restrictions, return checking, and a type for every expression node.
 5. **Code generation** (`compiler/codegen_vm.py`) — the typed AST to bytecode.
 6. **Execution** (`runtime/vm.py`) — the interpreter runs the bytecode.
 
@@ -325,6 +388,11 @@ Names inside the block resolve against the scope at that point, including shadow
 - `binding` — the `Symbol` that each identifier, declaration, parameter, and assignment target resolves to.
 - `frame_symbols` — every symbol a function declares, parameters first (the calling convention requires them to lead) and then declarations in source order.
 - `asm_scope` — the names visible at each `vm_asm` block, since its body is raw text that no other pass resolves.
+- `structs` — each struct's field layout and its heap type id.
+
+Two of these outlive the compiler. Codegen turns `structs` into a table the VM carries, giving each object's size and the word offsets of its reference fields; and it turns `frame_symbols` into a per-function **stack map** of which local slots hold references. Together they are what a collector needs to find its roots and trace through the heap. Nothing reads them yet.
+
+The stack map can be per-function rather than per-instruction because locals start at zero and address 0 is reserved for null, so a slot read before its first assignment is simply skipped — no liveness analysis required.
 
 Codegen never walks scopes. It turns `frame_symbols` into slots and then looks up the `Symbol` sema already resolved each node to, so the two passes cannot disagree about which `x` an `x` refers to. Symbols are compared by identity, so shadowed and sibling-scope declarations get distinct storage for free.
 
@@ -364,6 +432,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_pointers.py` | Frame vs heap address spaces, memory intrinsics, array helpers |
 | `tests/test_runtime.py` | 16-bit arithmetic, control flow, calling convention, VM faults |
 | `tests/test_resolver.py` | Include paths, cycles, diamonds, duplicate definitions |
+| `tests/test_structs.py` | Struct declaration, literals, fields, references, null, object layout |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 
 Tests are written as QuinLang source strings and asserted on their output or their error message, so they exercise the whole pipeline rather than one pass:
@@ -412,6 +481,6 @@ python3 -m tests.update_golden
 - `main`'s return value never reaches the process exit code.
 - `vm_asm` blocks are not checked for stack balance until run time.
 
-Future directions: restricting relational operators to `int`, structs, a garbage collector, and filling out `std/`.
+Future directions: a garbage collector (the object headers and stack maps it needs are already emitted), restricting relational operators to `int`, and filling out `std/`.
 
 The goal is to keep the compiler and VM small enough to read in one sitting and see exactly how each language feature works end to end.
