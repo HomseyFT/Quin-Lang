@@ -296,7 +296,7 @@ class TestStrings(QuinTestCase):
         self.assertOutput('fn main(): int { print("a$b"); return 0; }', "a$b")
 
     def test_interning_reuses_ids(self):
-        _, _, strings = compile_source(
+        _, _, strings, _ = compile_source(
             'fn main(): int { print("dup"); print("dup"); print("other"); return 0; }'
         )
         self.assertEqual(sorted(strings.values()), ["dup", "other"])

@@ -398,8 +398,11 @@ class TestHeapPointerArithmetic(QuinTestCase):
             "5",
         )
 
-    def test_difference_of_two_heapptrs_is_an_int(self):
-        self.assertPrints(
+    def test_difference_of_two_heapptrs_is_rejected(self):
+        # This was the only expression yielding a reference's numeric value as
+        # an int. Allowing it would let a program hide an address from a
+        # collector inside an untyped block and later reconstruct it.
+        self.assertCompileError(
             """
             fn main(): int {
                 let a: heapptr;
@@ -408,11 +411,10 @@ class TestHeapPointerArithmetic(QuinTestCase):
                 a = alloc(2);
                 b = alloc(2);
                 d = b - a;
-                println(d);
                 return 0;
             }
             """,
-            "2",
+            "Cannot subtract two heapptr values",
         )
 
     def test_multiplying_a_heapptr_is_rejected(self):
@@ -473,12 +475,12 @@ class TestNull(QuinTestCase):
     def test_not_assignable_to_ptr(self):
         self.assertCompileError(
             "fn main(): int { let p: ptr; p = null; return 0; }",
-            "Cannot assign heapptr to ptr",
+            "Cannot assign null to ptr",
         )
 
     def test_not_assignable_to_int(self):
         self.assertCompileError(
             "fn main(): int { let i: int; i = null; return 0; }",
-            "Cannot assign heapptr to int",
+            "Cannot assign null to int",
         )
 

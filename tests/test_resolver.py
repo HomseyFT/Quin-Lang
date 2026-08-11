@@ -104,6 +104,50 @@ class TestIncludes(QuinTestCase):
             ImportResolver(STD_PATH).resolve(entry)
         self.assertIn("Redefinition of function 'shared'", str(cm.exception))
 
+    def test_struct_from_an_included_file(self):
+        self.write("point.ql", "struct Point { x: int, y: int }")
+        entry = self.write(
+            "main.ql",
+            'include "./point.ql";\n'
+            "fn main(): int { let p: Point = Point { x: 6, y: 7 }; println(p.y); return 0; }",
+        )
+        self.assertEqual(run_file(entry).stdout, "7\n")
+
+    def test_struct_and_the_functions_using_it_may_live_apart(self):
+        self.write("point.ql", "struct Point { x: int, y: int }")
+        self.write(
+            "area.ql",
+            'include "./point.ql";\nfn area(p: Point): int { return p.x * p.y; }',
+        )
+        entry = self.write(
+            "main.ql",
+            'include "./area.ql";\n'
+            "fn main(): int { println(area(Point { x: 3, y: 4 })); return 0; }",
+        )
+        self.assertEqual(run_file(entry).stdout, "12\n")
+
+    def test_duplicate_struct_across_files(self):
+        self.write("dup.ql", "struct Shared { a: int }")
+        entry = self.write(
+            "main.ql",
+            'include "./dup.ql";\n'
+            "struct Shared { b: int }\nfn main(): int { return 0; }",
+        )
+        with self.assertRaises(ResolveError) as cm:
+            ImportResolver(STD_PATH).resolve(entry)
+        self.assertIn("Redefinition of struct 'Shared'", str(cm.exception))
+
+    def test_diamond_include_defines_a_struct_once(self):
+        self.write("base.ql", "struct Base { v: int }")
+        self.write("left.ql", 'include "./base.ql";\nfn left(): int { return 1; }')
+        self.write("right.ql", 'include "./base.ql";\nfn right(): int { return 2; }')
+        entry = self.write(
+            "main.ql",
+            'include "./left.ql";\ninclude "./right.ql";\n'
+            "fn main(): int { let b: Base = Base { v: 9 }; println(b.v); return 0; }",
+        )
+        self.assertEqual(run_file(entry).stdout, "9\n")
+
     def test_syntax_error_names_the_including_file(self):
         self.write("bad.ql", "fn broken( { }")
         entry = self.write(

@@ -38,7 +38,7 @@ class Run:
 
 
 def compile_file(path: Path):
-    """Compile a .ql file to (bytecode, function table, string table)."""
+    """Compile a .ql file to (bytecode, function table, string table, struct table)."""
     resolved = ImportResolver(STD_PATH).resolve(Path(path))
     ctx = SemanticAnalyzer().analyze(resolved.program)
     return CodeGenVM().generate(resolved.program, ctx)
@@ -53,18 +53,18 @@ def compile_source(source: str):
 
 
 def run_file(path: Path) -> Run:
-    code, functions, strings = compile_file(path)
+    code, functions, strings, structs = compile_file(path)
     buf = io.StringIO()
     with redirect_stdout(buf):
-        exit_value = QuinVM(code, functions, strings).run_main()
+        exit_value = QuinVM(code, functions, strings, structs).run_main()
     return Run(buf.getvalue(), exit_value)
 
 
 def run_source(source: str) -> Run:
-    code, functions, strings = compile_source(source)
+    code, functions, strings, structs = compile_source(source)
     buf = io.StringIO()
     with redirect_stdout(buf):
-        exit_value = QuinVM(code, functions, strings).run_main()
+        exit_value = QuinVM(code, functions, strings, structs).run_main()
     return Run(buf.getvalue(), exit_value)
 
 
