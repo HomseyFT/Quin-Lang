@@ -151,5 +151,121 @@ class TestSyntaxErrors(QuinTestCase):
         self.assertIn(":3:", message)
 
 
+class TestForLoopForms(QuinTestCase):
+    def test_declaring_init(self):
+        self.assertPrints(
+            "fn main(): int { for (let i: int = 0; i < 2; i = i + 1) { println(i); } return 0; }",
+            "0", "1",
+        )
+
+    def test_inferred_init_type(self):
+        self.assertPrints(
+            "fn main(): int { for (let i = 0; i < 2; i = i + 1) { println(i); } return 0; }",
+            "0", "1",
+        )
+
+    def test_assigning_init(self):
+        self.assertPrints(
+            "fn main(): int { let i: int; for (i = 0; i < 2; i = i + 1) { println(i); } return 0; }",
+            "0", "1",
+        )
+
+    def test_empty_init(self):
+        self.assertPrints(
+            "fn main(): int { let i: int = 0; for (; i < 2; i = i + 1) { println(i); } return 0; }",
+            "0", "1",
+        )
+
+    def test_empty_step(self):
+        self.assertPrints(
+            "fn main(): int { let i: int = 0; for (; i < 2;) { println(i); i = i + 1; } return 0; }",
+            "0", "1",
+        )
+
+    def test_no_clauses_at_all_needs_a_break(self):
+        self.assertPrints(
+            "fn main(): int { let i: int = 0; for (;;) { i = i + 1; if (i == 2) { break; } } "
+            "println(i); return 0; }",
+            "2",
+        )
+
+    def test_call_as_step(self):
+        self.assertPrints(
+            "fn bump(): void { println(9); }\n"
+            "fn main(): int { for (let i = 0; i < 2; bump()) { i = i + 1; } return 0; }",
+            "9", "9",
+        )
+
+    def test_empty_body(self):
+        self.assertPrints(
+            "fn main(): int { let i: int = 0; for (; i < 3; i = i + 1) { } println(i); return 0; }",
+            "3",
+        )
+
+
+class TestBlockStatement(QuinTestCase):
+    def test_bare_block_runs_its_statements(self):
+        self.assertPrints(
+            "fn main(): int { { println(1); println(2); } return 0; }", "1", "2"
+        )
+
+    def test_empty_block(self):
+        self.assertPrints("fn main(): int { { } println(1); return 0; }", "1")
+
+    def test_nested_blocks(self):
+        self.assertPrints(
+            "fn main(): int { { { println(1); } } return 0; }", "1"
+        )
+
+
+class TestControlFlowSyntaxErrors(QuinTestCase):
+    def test_for_requires_parens(self):
+        self.assertCompileError(
+            "fn main(): int { for let i = 0; i < 2; i = i + 1 { } return 0; }",
+            "Expected '(' after 'for'",
+        )
+
+    def test_for_requires_braces(self):
+        self.assertCompileError(
+            "fn main(): int { for (let i = 0; i < 2; i = i + 1) println(i); return 0; }",
+            "Expected '{' to start block",
+        )
+
+    def test_for_requires_condition_semicolon(self):
+        self.assertCompileError(
+            "fn main(): int { for (let i = 0; i < 2) { } return 0; }",
+            "Expected ';' after for-loop condition",
+        )
+
+    def test_for_requires_init_semicolon(self):
+        self.assertCompileError(
+            "fn main(): int { let i: int; for (i = 0 i < 2; i = i + 1) { } return 0; }",
+            "Expected ';' after for-loop initializer",
+        )
+
+    def test_for_requires_closing_paren(self):
+        self.assertCompileError(
+            "fn main(): int { for (let i = 0; i < 2; i = i + 1 { } return 0; }",
+            "Expected ')' after for-loop clauses",
+        )
+
+    def test_break_requires_semicolon(self):
+        self.assertCompileError(
+            "fn main(): int { while (true) { break } return 0; }",
+            "Expected ';' after 'break'",
+        )
+
+    def test_continue_requires_semicolon(self):
+        self.assertCompileError(
+            "fn main(): int { while (true) { continue } return 0; }",
+            "Expected ';' after 'continue'",
+        )
+
+    def test_keywords_are_not_identifiers(self):
+        self.assertCompileError(
+            "fn main(): int { let for: int = 1; return 0; }", "Expected variable name"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -305,6 +305,228 @@ class TestStrings(QuinTestCase):
         self.assertOutput('fn main(): int { print(""); print("x"); return 0; }', "x")
 
 
+class TestForLoops(QuinTestCase):
+    def test_counts_up(self):
+        self.assertPrints(
+            "fn main(): int { for (let i = 0; i < 3; i = i + 1) { println(i); } return 0; }",
+            "0", "1", "2",
+        )
+
+    def test_body_may_not_run(self):
+        self.assertPrints(
+            "fn main(): int { for (let i = 5; i < 3; i = i + 1) { println(i); } println(9); return 0; }",
+            "9",
+        )
+
+    def test_step_runs_after_the_body(self):
+        # If the step ran first, the loop would print 1, 2, 3.
+        self.assertPrints(
+            "fn main(): int { for (let i = 0; i < 3; i = i + 1) { println(i); } return 0; }",
+            "0", "1", "2",
+        )
+
+    def test_counts_down(self):
+        self.assertPrints(
+            "fn main(): int { for (let i = 3; i > 0; i = i - 1) { println(i); } return 0; }",
+            "3", "2", "1",
+        )
+
+    def test_nested(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                for (let i = 0; i < 2; i = i + 1) {
+                    for (let j = 0; j < 2; j = j + 1) {
+                        println(i * 10 + j);
+                    }
+                }
+                return 0;
+            }
+            """,
+            "0", "1", "10", "11",
+        )
+
+    def test_return_from_inside(self):
+        self.assertPrints(
+            """
+            fn find(): int {
+                for (let i = 0; i < 10; i = i + 1) {
+                    if (i == 4) { return i; }
+                }
+                return 0;
+            }
+            fn main(): int { println(find()); return 0; }
+            """,
+            "4",
+        )
+
+
+class TestBreak(QuinTestCase):
+    def test_exits_a_for_loop(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                for (let i = 0; i < 10; i = i + 1) {
+                    if (i == 3) { break; }
+                    println(i);
+                }
+                println(9);
+                return 0;
+            }
+            """,
+            "0", "1", "2", "9",
+        )
+
+    def test_exits_a_while_loop(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let i: int = 0;
+                while (i < 10) {
+                    if (i == 2) { break; }
+                    println(i);
+                    i = i + 1;
+                }
+                println(9);
+                return 0;
+            }
+            """,
+            "0", "1", "9",
+        )
+
+    def test_binds_to_the_innermost_loop(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                for (let i = 0; i < 2; i = i + 1) {
+                    for (let j = 0; j < 5; j = j + 1) {
+                        if (j == 1) { break; }
+                        println(j);
+                    }
+                    println(i);
+                }
+                return 0;
+            }
+            """,
+            "0", "0", "0", "1",
+        )
+
+    def test_escapes_an_unconditional_loop(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let i: int = 0;
+                while (true) {
+                    i = i + 1;
+                    if (i == 3) { break; }
+                }
+                println(i);
+                return 0;
+            }
+            """,
+            "3",
+        )
+
+    def test_leaves_the_operand_stack_balanced(self):
+        # A break that skipped a pending POP would surface here.
+        self.assertPrints(
+            """
+            fn side(): int { return 1; }
+            fn main(): int {
+                for (let i = 0; i < 3; i = i + 1) {
+                    side();
+                    if (i == 1) { break; }
+                }
+                println(7);
+                return 0;
+            }
+            """,
+            "7",
+        )
+
+
+class TestContinue(QuinTestCase):
+    def test_skips_the_rest_of_a_for_iteration(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                for (let i = 0; i < 4; i = i + 1) {
+                    if (i == 1) { continue; }
+                    println(i);
+                }
+                return 0;
+            }
+            """,
+            "0", "2", "3",
+        )
+
+    def test_still_runs_the_for_step(self):
+        # The regression this guards: if continue jumped to the condition
+        # instead of the step, i would never advance and this would hang.
+        self.assertPrints(
+            """
+            fn main(): int {
+                let seen: int = 0;
+                for (let i = 0; i < 5; i = i + 1) {
+                    seen = seen + 1;
+                    continue;
+                }
+                println(seen);
+                return 0;
+            }
+            """,
+            "5",
+        )
+
+    def test_skips_the_rest_of_a_while_iteration(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let i: int = 0;
+                while (i < 4) {
+                    i = i + 1;
+                    if (i == 2) { continue; }
+                    println(i);
+                }
+                return 0;
+            }
+            """,
+            "1", "3", "4",
+        )
+
+    def test_binds_to_the_innermost_loop(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                for (let i = 0; i < 2; i = i + 1) {
+                    for (let j = 0; j < 3; j = j + 1) {
+                        if (j == 1) { continue; }
+                        println(j);
+                    }
+                }
+                return 0;
+            }
+            """,
+            "0", "2", "0", "2",
+        )
+
+    def test_leaves_the_operand_stack_balanced(self):
+        self.assertPrints(
+            """
+            fn side(): int { return 1; }
+            fn main(): int {
+                for (let i = 0; i < 3; i = i + 1) {
+                    side();
+                    continue;
+                }
+                println(7);
+                return 0;
+            }
+            """,
+            "7",
+        )
+
+
 class TestExitValue(QuinTestCase):
     def test_returned_value(self):
         self.assertEqual(run_source("fn main(): int { return 7; }").exit_value, 7)

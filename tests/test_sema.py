@@ -324,5 +324,60 @@ class TestArrayRestrictions(QuinTestCase):
         )
 
 
+class TestLoopStatements(QuinTestCase):
+    def test_for_condition_must_be_bool(self):
+        self.assertCompileError(
+            "fn main(): int { for (let i = 0; i; i = i + 1) { } return 0; }",
+            "For condition must be bool",
+        )
+
+    def test_omitted_for_condition_is_allowed(self):
+        self.assertCompiles(
+            "fn main(): int { for (;;) { break; } return 0; }"
+        )
+
+    def test_for_never_counts_as_returning(self):
+        self.assertCompileError(
+            "fn f(): int { for (let i = 0; i < 1; i = i + 1) { return 1; } } "
+            "fn main(): int { return 0; }",
+            "missing return statement",
+        )
+
+    def test_break_outside_a_loop(self):
+        self.assertCompileError(
+            "fn main(): int { break; return 0; }", "'break' outside of a loop"
+        )
+
+    def test_continue_outside_a_loop(self):
+        self.assertCompileError(
+            "fn main(): int { continue; return 0; }", "'continue' outside of a loop"
+        )
+
+    def test_break_in_an_if_outside_a_loop(self):
+        self.assertCompileError(
+            "fn main(): int { if (true) { break; } return 0; }",
+            "'break' outside of a loop",
+        )
+
+    def test_break_does_not_escape_the_function_that_loops(self):
+        # The loop is in another function, so this break has nothing to bind to.
+        self.assertCompileError(
+            "fn looper(): void { while (true) { return; } }\n"
+            "fn main(): int { break; return 0; }",
+            "'break' outside of a loop",
+        )
+
+    def test_break_after_a_loop_has_closed(self):
+        self.assertCompileError(
+            "fn main(): int { while (false) { } break; return 0; }",
+            "'break' outside of a loop",
+        )
+
+    def test_break_is_allowed_inside_a_nested_block(self):
+        self.assertCompiles(
+            "fn main(): int { while (true) { { break; } } return 0; }"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

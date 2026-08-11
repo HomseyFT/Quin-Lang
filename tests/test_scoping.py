@@ -278,5 +278,92 @@ class TestVmAsmScope(QuinTestCase):
         )
 
 
+class TestForLoopScoping(QuinTestCase):
+    def test_loop_variable_does_not_leak(self):
+        self.assertCompileError(
+            "fn main(): int { for (let i = 0; i < 2; i = i + 1) { } println(i); return 0; }",
+            "Undeclared variable 'i'",
+        )
+
+    def test_two_loops_may_reuse_the_name(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                for (let i = 0; i < 1; i = i + 1) { println(i); }
+                for (let i = 5; i < 6; i = i + 1) { println(i); }
+                return 0;
+            }
+            """,
+            "0", "5",
+        )
+
+    def test_loop_variable_shadows_an_outer_name(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let i: int = 99;
+                for (let i = 0; i < 2; i = i + 1) { println(i); }
+                println(i);
+                return 0;
+            }
+            """,
+            "0", "1", "99",
+        )
+
+    def test_body_may_shadow_the_loop_variable(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                for (let i = 0; i < 2; i = i + 1) {
+                    let i: int = 7;
+                    println(i);
+                }
+                return 0;
+            }
+            """,
+            "7", "7",
+        )
+
+    def test_sibling_loop_variables_get_distinct_slots(self):
+        ctx = analyze(
+            """
+            fn main(): int {
+                for (let i = 0; i < 1; i = i + 1) { }
+                for (let i = 0; i < 1; i = i + 1) { }
+                return 0;
+            }
+            """
+        )
+        frame = ctx.frame_symbols["main"]
+        loop_vars = [s for s in frame if s.name == "i"]
+        self.assertEqual(len(loop_vars), 2)
+        self.assertIsNot(loop_vars[0], loop_vars[1])
+
+
+class TestBlockScoping(QuinTestCase):
+    def test_bare_block_introduces_a_scope(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let x: int = 1;
+                { let x: int = 2; println(x); }
+                println(x);
+                return 0;
+            }
+            """,
+            "2", "1",
+        )
+
+    def test_declaration_does_not_escape_a_bare_block(self):
+        self.assertCompileError(
+            "fn main(): int { { let x: int = 1; } println(x); return 0; }",
+            "Undeclared variable 'x'",
+        )
+
+    def test_bare_block_declarations_reach_the_frame(self):
+        ctx = analyze("fn main(): int { { let x: int = 1; } return 0; }")
+        self.assertIn("x", [s.name for s in ctx.frame_symbols["main"]])
+
+
 if __name__ == "__main__":
     unittest.main()
