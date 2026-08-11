@@ -59,7 +59,11 @@ fn main(): int { return 0; }
 fn main(): void { }
 ```
 
-`main`'s return value becomes the process exit code. Only its low byte survives, as in C: `return 256` exits 0 and `return -1` exits 255. Compile and runtime errors also exit 1, so a program returning 1 is indistinguishable from a failure unless you check stderr.
+`main`'s return value becomes the process exit code. Only its low byte survives, as in C: `return 256` exits 0 and `return -1` exits 255.
+
+The compiler warns when `main` returns a constant outside `0..255`, naming the exit code it will really produce, so that `return 256` is not mistaken for success. Constant arithmetic is folded, so `return 0 - 1` is caught too; a value the compiler cannot evaluate passes without comment.
+
+Compile and runtime errors also exit 1, so a program returning 1 is indistinguishable from a failure unless you check stderr.
 
 ## Types
 

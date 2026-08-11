@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from compiler.driver_vm import process_exit_code
-from tests.harness import REPO_ROOT
+from tests.harness import REPO_ROOT, QuinTestCase, warnings_for
 
 
 def run_driver(source: str) -> subprocess.CompletedProcess:
@@ -91,6 +91,91 @@ class TestExitCodeNarrowing(unittest.TestCase):
     def test_the_result_is_always_a_valid_exit_status(self):
         for v in range(-32768, 32768, 97):
             self.assertTrue(0 <= process_exit_code(v) <= 255, f"failed for {v}")
+
+
+class TestExitCodeWarning(QuinTestCase):
+    """A constant main can only return 0..255 unambiguously.
+
+    Without this, `return 256` exits 0 and reads as success, which is the one
+    case where the truncation is actively misleading rather than merely lossy.
+    """
+
+    def test_256_is_warned_about(self):
+        message = self.assertCompileWarning(
+            "fn main(): int { return 256; }", "main returns 256"
+        )
+        self.assertIn("exits 0", message, "the warning should name the real exit code")
+
+    def test_the_warning_names_the_resulting_code(self):
+        self.assertCompileWarning("fn main(): int { return 300; }", "exits 44")
+
+    def test_negative_values_are_warned_about(self):
+        self.assertCompileWarning("fn main(): int { return 0 - 1; }", "main returns -1")
+        self.assertCompileWarning("fn main(): int { return 0 - 1; }", "exits 255")
+
+    def test_unary_negation_is_folded(self):
+        self.assertCompileWarning("fn main(): int { return -2; }", "main returns -2")
+
+    def test_arithmetic_is_folded(self):
+        # 200 + 100 is 300, which is out of range even though neither part is.
+        self.assertCompileWarning("fn main(): int { return 200 + 100; }", "exits 44")
+
+    def test_wrapping_is_accounted_for(self):
+        # 32767 + 1 wraps to -32768, so that is what gets returned and reported.
+        self.assertCompileWarning(
+            "fn main(): int { return 32767 + 1; }", "main returns -32768"
+        )
+
+    def test_values_in_range_are_not_warned_about(self):
+        for v in ("0", "1", "42", "255", "254 + 1"):
+            self.assertNoCompileWarnings(f"fn main(): int {{ return {v}; }}")
+
+    def test_void_main_is_not_warned_about(self):
+        self.assertNoCompileWarnings("fn main(): void { }")
+
+    def test_a_non_constant_return_is_not_warned_about(self):
+        # Nothing can be known about this at compile time, so stay quiet
+        # rather than guess.
+        self.assertNoCompileWarnings(
+            "fn f(): int { return 999; }\nfn main(): int { return f(); }"
+        )
+        self.assertNoCompileWarnings(
+            "fn main(): int { let x: int = 300; return x; }"
+        )
+
+    def test_other_functions_are_not_warned_about(self):
+        # Only main's return becomes an exit code.
+        self.assertNoCompileWarnings(
+            "fn helper(): int { return 999; }\n"
+            "fn main(): int { println(helper()); return 0; }"
+        )
+
+    def test_every_offending_return_is_reported(self):
+        found = warnings_for(
+            """
+            fn main(): int {
+                if (true) { return 256; }
+                return 0 - 5;
+            }
+            """
+        )
+        self.assertEqual(len(found), 2, f"expected both returns flagged, got {found}")
+
+    def test_the_warning_carries_a_location(self):
+        found = warnings_for("fn main(): int {\n    return 256;\n}")
+        self.assertTrue(found[0].startswith("[2:"), f"expected line 2, got {found[0]}")
+
+    def test_the_warning_goes_to_stderr_and_changes_nothing(self):
+        result = run_driver('fn main(): int { println("out"); return 256; }')
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "out",
+                         "warnings must not pollute stdout")
+        self.assertIn("Warning:", result.stderr)
+        self.assertIn("main returns 256", result.stderr)
+
+    def test_a_clean_program_prints_no_warning(self):
+        result = run_driver("fn main(): int { return 0; }")
+        self.assertEqual(result.stderr, "")
 
 
 class TestErrorExits(unittest.TestCase):

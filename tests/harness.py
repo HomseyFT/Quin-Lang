@@ -52,6 +52,20 @@ def compile_source(source: str):
         return compile_file(entry)
 
 
+def warnings_for(source: str) -> list:
+    """The compile-time warnings a program produces, as strings.
+
+    Warnings live on the semantic Context, so tests can read them directly
+    rather than capturing the driver's stderr.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        entry = Path(td) / "main.ql"
+        entry.write_text(source, encoding="utf-8")
+        resolved = ImportResolver(STD_PATH).resolve(entry)
+        ctx = SemanticAnalyzer().analyze(resolved.program)
+        return [str(w) for w in ctx.warnings]
+
+
 def run_file(path: Path) -> Run:
     code, functions, strings, structs = compile_file(path)
     buf = io.StringIO()
@@ -121,6 +135,24 @@ class QuinTestCase(unittest.TestCase):
             f"expected a runtime error containing {expected_substring!r}, "
             f"but the program ran to completion"
         )
+
+    def assertCompileWarning(self, source: str, expected_substring: str) -> str:
+        """Assert a program compiles and warns, with a message containing this.
+
+        Deliberately not named assertWarns: unittest already defines that for
+        Python's own warnings, and shadowing it would break every caller.
+        """
+        found = warnings_for(source)
+        self.assertTrue(found, f"expected a warning containing {expected_substring!r}, got none")
+        joined = " | ".join(found)
+        self.assertIn(expected_substring, joined,
+                      f"wrong warning.\n  expected substring: {expected_substring!r}"
+                      f"\n  actual: {joined!r}")
+        return joined
+
+    def assertNoCompileWarnings(self, source: str):
+        found = warnings_for(source)
+        self.assertEqual(found, [], f"expected no warnings, got: {found}")
 
     def assertCompiles(self, source: str):
         """Assert a program type-checks and lowers without error."""

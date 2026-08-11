@@ -56,7 +56,18 @@ Other examples worth reading: `examples/control_flow.ql` (short-circuit operator
 python3 -m compiler.driver_vm prog.ql && echo "ok"
 ```
 
-An exit status is 8 bits wide while `int` is 16-bit signed, so the low byte is what survives, exactly as in C: `return 256` exits 0 and `return -1` exits 255. Compile and runtime errors exit 1, which a program returning 1 cannot be distinguished from — check stderr if that matters.
+An exit status is 8 bits wide while `int` is 16-bit signed, so the low byte is what survives, exactly as in C: `return 256` exits 0 and `return -1` exits 255.
+
+Because `return 256` exiting 0 looks exactly like success, the compiler warns when `main` returns a constant outside `0..255`:
+
+```
+Warning: [1:25] main returns 256, but a process exit code carries only the low
+byte, so this exits 0. Return a value in 0..255 to say what you mean.
+```
+
+The check constant-folds, so `return 0 - 1`, `return 200 + 100`, and `return 32767 + 1` are all caught, reported as the value they actually produce. A return the compiler cannot evaluate is left alone. Warnings go to stderr, so piping stdout stays clean, and they change neither the exit code nor whether the program runs.
+
+Compile and runtime errors exit 1, which a program returning 1 cannot be distinguished from — check stderr if that matters.
 
 ### Running the tests
 
@@ -64,7 +75,7 @@ An exit status is 8 bits wide while `int` is 16-bit signed, so the low byte is w
 python3 -m unittest discover -s tests -t .
 ```
 
-432 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+446 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -479,7 +490,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_resolver.py` | Include paths, cycles, diamonds, duplicate definitions |
 | `tests/test_structs.py` | Struct declaration, literals, fields, references, null, object layout |
 | `tests/test_gc.py` | What the collector reclaims, what it must not, and operand-stack tagging |
-| `tests/test_driver.py` | The CLI as a real process: exit codes and error reporting |
+| `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 
 Tests are written as QuinLang source strings and asserted on their output or their error message, so they exercise the whole pipeline rather than one pass:
