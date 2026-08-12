@@ -75,7 +75,7 @@ Compile and runtime errors exit 1, which a program returning 1 cannot be disting
 python3 -m unittest discover -s tests -t .
 ```
 
-458 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+480 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -411,11 +411,35 @@ A reference may point into the middle of a block, because `heapptr + int` is all
 
 The reclaimed space is then zeroed. Sliding an object down leaves its old bytes intact, so a reference the collector failed to update would still read a perfectly good copy of the object and return the right answer — a bug that only appears much later, when that memory is handed out again. Wiping it turns that into an immediate null dereference.
 
+**Releasing a scope.** When a scope ends, the compiler stores null into the reference slots it declared, so leaving a scope stops its variables rooting what they named:
+
+```quin
+for (let i = 0; i < 1000; i = i + 1) {
+    let big: Wide = Wide { ... };
+}   // big's slot is cleared here, on every iteration
+```
+
+Without this the slot keeps its last value until the function returns, so a loop leaves one object — possibly a large one — alive for the rest of the function. `break` and `continue` release the scopes they jump out of too.
+
+This costs two instructions per reference slot per scope exit, and nothing at all for a scope that declares no references, which is most of them. It needs no VM support: the collector already ignores a slot holding null.
+
+Clearing a slot removes one root, not the object. Anything still reachable another way is untouched:
+
+```quin
+let keep: Node = null;
+for (let i = 0; i < 5; i = i + 1) {
+    let a: Node = Node { value: i, next: null };
+    keep = a;      // survives; 'a' going out of scope changes nothing
+}
+```
+
 **Why moving is safe here.** Every reference the program can reach is known exactly: the compiler's stack maps say which frame slots hold one, and the VM tags the operand stack as it pushes. Just as importantly, no QuinLang expression can turn a reference into an `int` — neither `heapptr - heapptr` nor address-of on a reference exists — so a program cannot be holding a copy of an address that the collector does not know to update. Those two restrictions were added for exactly this reason.
 
 Two things worth knowing:
 
-- The stack map is per function, not per instruction. A variable that is dead but still occupies its slot keeps its object alive until the function returns. This is what lets the map be computed without liveness analysis: locals start at zero and address 0 is null, so a slot read before its first assignment is simply skipped.
+- The stack map is per function, not per instruction, so a variable that is still in scope keeps its object alive even if the code will never read it again. Scope boundaries are handled — see below — but a dead variable in the function's own top-level scope survives until the function returns. Closing that needs real liveness analysis.
+
+  The map can be per function precisely because locals start at zero and address 0 is null, so a slot read before its first assignment is simply skipped. Releasing a slot is the same trick applied at the other end.
 - Object addresses are stable between collections but not across one. Nothing in the language can observe this, since a reference can never be converted to an integer.
 
 ### Inline bytecode
@@ -549,6 +573,6 @@ python3 -m tests.update_golden
 - The process exit code carries only the low byte of `main`'s return value, and 1 collides with the error exit code.
 - `vm_asm` blocks are not checked for stack balance until run time.
 
-Future directions: releasing a reference slot when its variable goes out of scope, so a dead-but-in-scope variable stops retaining its object until the function returns, then a debugger, and filling out `std/`.
+Future directions: a debugger (the source mapping it needs is still the cheap thing to front-load), liveness analysis so a variable dead but still in scope stops rooting its object, and filling out `std/`.
 
 The goal is to keep the compiler and VM small enough to read in one sitting and see exactly how each language feature works end to end.

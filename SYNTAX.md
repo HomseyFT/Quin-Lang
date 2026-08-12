@@ -576,5 +576,5 @@ println(ct_select(0, a, b));   // 20
 - Comparing `str` values compares content. Ordering is lexicographic by byte, with no case folding, so `"Z" < "a"` is `true`.
 - No methods, no arrays of structs, and no array-typed struct fields.
 - The collector compacts, so there is no fragmentation: every free byte is usable no matter how scattered the garbage was. Objects move, but a `heapptr` is rewritten to follow its object, so it stays valid.
-- A variable that is dead but still in scope keeps its object alive until its function returns.
+- Leaving a scope releases the references it declared, so a loop body or block stops rooting its objects as soon as it ends. A variable in the function's own top-level scope is still rooted until the function returns, even after its last use.
 - No escape sequences in string literals.
