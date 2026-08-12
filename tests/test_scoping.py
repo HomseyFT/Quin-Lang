@@ -340,6 +340,103 @@ class TestForLoopScoping(QuinTestCase):
         self.assertIsNot(loop_vars[0], loop_vars[1])
 
 
+class TestScopeReleaseDoesNotDisturbScoping(QuinTestCase):
+    """Releasing a scope's slots must not change what any name means.
+
+    The clears are emitted from the symbols sema recorded per scope, so a
+    shadowing or sibling declaration must have its own slot cleared and not
+    somebody else's.
+    """
+
+    def test_releasing_an_inner_scope_leaves_the_outer_binding_alone(self):
+        self.assertPrints(
+            "struct Node { v: int }\n"
+            """
+            fn main(): int {
+                let n: Node = Node { v: 1 };
+                { let n: Node = Node { v: 2 }; println(n.v); }
+                println(n.v);
+                return 0;
+            }
+            """,
+            "2", "1",
+        )
+
+    def test_a_shadowed_reference_survives_the_inner_scope(self):
+        self.assertPrints(
+            "struct Node { v: int }\n"
+            """
+            fn main(): int {
+                let outer: Node = Node { v: 7 };
+                for (let i = 0; i < 3; i = i + 1) {
+                    let outer: Node = Node { v: i };
+                }
+                gc();
+                println(outer.v);
+                return 0;
+            }
+            """,
+            "7",
+        )
+
+    def test_sibling_scopes_release_their_own_slots(self):
+        ctx = analyze(
+            "struct Node { v: int }\n"
+            """
+            fn main(): int {
+                { let a: Node = Node { v: 1 }; }
+                { let a: Node = Node { v: 2 }; }
+                return 0;
+            }
+            """
+        )
+        frame = ctx.frame_symbols["main"]
+        both = [s for s in frame if s.name == "a"]
+        self.assertEqual(len(both), 2)
+        self.assertIsNot(both[0], both[1], "siblings must be distinct symbols")
+        # Each scope records exactly its own symbol.
+        recorded = [syms for syms in ctx.scope_refs.values()]
+        self.assertIn([both[0]], recorded)
+        self.assertIn([both[1]], recorded)
+
+    def test_only_reference_typed_declarations_are_recorded(self):
+        ctx = analyze(
+            "struct Node { v: int }\n"
+            """
+            fn main(): int {
+                {
+                    let count: int = 1;
+                    let flag: bool = true;
+                    let n: Node = Node { v: 1 };
+                }
+                return 0;
+            }
+            """
+        )
+        recorded = [s.name for syms in ctx.scope_refs.values() for s in syms]
+        self.assertEqual(recorded, ["n"], "ints and bools are not roots")
+
+    def test_a_scope_with_no_references_records_nothing(self):
+        ctx = analyze(
+            "fn main(): int { { let a: int = 1; } return 0; }"
+        )
+        self.assertEqual(ctx.scope_refs, {})
+
+    def test_frame_layout_is_unchanged_by_releasing(self):
+        # Clears reuse existing slots; they must not allocate new ones.
+        ctx = analyze(
+            "struct Node { v: int }\n"
+            """
+            fn main(): int {
+                for (let i = 0; i < 3; i = i + 1) { let n: Node = Node { v: i }; }
+                return 0;
+            }
+            """
+        )
+        names = [s.name for s in ctx.frame_symbols["main"]]
+        self.assertEqual(names, ["i", "n"])
+
+
 class TestBlockScoping(QuinTestCase):
     def test_bare_block_introduces_a_scope(self):
         self.assertPrints(

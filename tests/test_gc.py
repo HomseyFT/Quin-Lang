@@ -891,6 +891,282 @@ class TestHeapIntegrity(QuinTestCase):
         )
 
 
+class TestScopeReleasesReferences(QuinTestCase):
+    """Leaving a scope stops its variables rooting what they named.
+
+    A slot holds its last value until the function returns, so without this a
+    loop body's variable keeps one object alive for the rest of the function --
+    and a big object, or a long-running function, makes that expensive.
+    """
+
+    def assertNothingRetained(self, source: str):
+        vm, _ = run_and_inspect(source)
+        self.assertEqual(vm.heap_in_use(), 0,
+                         "the scope's references should have been released")
+
+    def test_a_loop_body_releases_each_iteration(self):
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                for (let i = 0; i < 50; i = i + 1) {
+                    let junk: Node = Node { value: i, next: null };
+                }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_a_while_body_releases_each_iteration(self):
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                let i: int;
+                while (i < 50) {
+                    let junk: Node = Node { value: i, next: null };
+                    i = i + 1;
+                }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_a_bare_block_releases_at_its_end(self):
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                { let junk: Node = Node { value: 1, next: null }; }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_both_if_branches_release(self):
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                if (true) { let a: Node = Node { value: 1, next: null }; }
+                else { let b: Node = Node { value: 2, next: null }; }
+                if (false) { let c: Node = Node { value: 3, next: null }; }
+                else { let d: Node = Node { value: 4, next: null }; }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_nested_scopes_release_from_the_inside_out(self):
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                {
+                    let outer: Node = Node { value: 1, next: null };
+                    {
+                        let middle: Node = Node { value: 2, next: null };
+                        { let inner: Node = Node { value: 3, next: null }; }
+                    }
+                }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_break_releases_the_scope_it_jumps_out_of(self):
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                for (let i = 0; i < 50; i = i + 1) {
+                    let junk: Node = Node { value: i, next: null };
+                    if (i == 3) { break; }
+                }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_continue_releases_the_scope_it_jumps_out_of(self):
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                for (let i = 0; i < 50; i = i + 1) {
+                    let junk: Node = Node { value: i, next: null };
+                    continue;
+                }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_break_from_a_nested_scope_releases_every_scope_it_leaves(self):
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                for (let i = 0; i < 50; i = i + 1) {
+                    let a: Node = Node { value: i, next: null };
+                    {
+                        let b: Node = Node { value: i, next: null };
+                        if (i == 2) { break; }
+                    }
+                }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_a_for_init_reference_is_released_when_the_loop_ends(self):
+        # The init variable has to still hold its object when the loop ends,
+        # or the release is a no-op and this proves nothing. Walking it to
+        # null in the step clause -- the obvious way to write this -- would do
+        # exactly that, so the loop is driven by a separate counter.
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                let count: int = 0;
+                for (let n: Node = Node { value: 1, next: null };
+                     count < 3; count = count + 1) { }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_a_for_init_reference_is_released_when_a_break_ends_the_loop(self):
+        self.assertNothingRetained(
+            NODE +
+            """
+            fn main(): int {
+                for (let n: Node = Node { value: 1, next: null };; ) {
+                    break;
+                }
+                gc();
+                return 0;
+            }
+            """
+        )
+
+    def test_a_loop_body_no_longer_retains_its_last_object(self):
+        # The whole point: 200 iterations used to leave one object rooted for
+        # the rest of main. Now the loop leaves nothing behind.
+        vm, out = run_and_inspect(
+            NODE +
+            """
+            fn main(): int {
+                for (let i = 0; i < 200; i = i + 1) {
+                    let junk: Node = Node { value: i, next: null };
+                }
+                gc();
+                println(7);
+                return 0;
+            }
+            """
+        )
+        self.assertEqual(out.strip(), "7")
+        self.assertEqual(vm.heap_in_use(), 0)
+        self.assertGreaterEqual(vm.stats.objects_freed, 200)
+
+    def test_an_object_that_escapes_its_scope_survives(self):
+        # Releasing a slot removes one root, not the object. This is the
+        # correctness side of the change.
+        self.assertPrints(
+            NODE +
+            """
+            fn main(): int {
+                let keep: Node = null;
+                for (let i = 0; i < 5; i = i + 1) {
+                    let a: Node = Node { value: i, next: null };
+                    keep = a;
+                }
+                gc();
+                println(keep.value);
+                return 0;
+            }
+            """,
+            "4",
+        )
+
+    def test_a_list_built_in_a_loop_survives(self):
+        self.assertPrints(
+            NODE +
+            """
+            fn length(head: Node): int {
+                let n: int = 0;
+                let cur: Node = head;
+                while (cur != null) { n = n + 1; cur = cur.next; }
+                return n;
+            }
+            fn main(): int {
+                let head: Node = null;
+                for (let i = 0; i < 20; i = i + 1) {
+                    let fresh: Node = Node { value: i, next: head };
+                    head = fresh;
+                }
+                gc();
+                println(length(head));
+                return 0;
+            }
+            """,
+            "20",
+        )
+
+    def test_a_returned_object_is_not_released_early(self):
+        self.assertPrints(
+            NODE +
+            """
+            fn make(): Node {
+                let n: Node = Node { value: 9, next: null };
+                return n;
+            }
+            fn main(): int { let got: Node = make(); gc(); println(got.value); return 0; }
+            """,
+            "9",
+        )
+
+    def test_a_variable_in_the_functions_own_scope_is_still_retained(self):
+        # The remaining limit, pinned deliberately: a variable that is dead but
+        # still in scope keeps its object until the function returns. Closing
+        # that needs real liveness analysis, not scope boundaries.
+        vm, _ = run_and_inspect(
+            NODE +
+            """
+            fn main(): int {
+                let held: Node = Node { value: 1, next: null };
+                gc();
+                return 0;
+            }
+            """
+        )
+        self.assertEqual(vm.heap_in_use(), 8,
+                         "a top-level local is still rooted until return")
+
+    def test_releasing_costs_nothing_when_a_scope_holds_no_references(self):
+        from compiler.bytecode import OpCode
+        code, _, _, _ = compile_source(
+            "fn main(): int { for (let i = 0; i < 3; i = i + 1) { let x: int = i; } return 0; }"
+        )
+        # No reference-typed declaration anywhere, so no release is emitted.
+        stores = [i for i, ins in enumerate(code)
+                  if ins.op is OpCode.STORE_LOCAL
+                  and i and code[i - 1].op is OpCode.PUSH_INT and code[i - 1].arg == 0]
+        # The only PUSH_INT 0 / STORE_LOCAL pairs are the zero-initialisers
+        # for the declarations themselves, one per declared variable.
+        self.assertLessEqual(len(stores), 2)
+
+
 class TestGcBuiltin(QuinTestCase):
     def test_gc_is_callable_as_a_statement(self):
         self.assertPrints("fn main(): int { gc(); println(1); return 0; }", "1")
