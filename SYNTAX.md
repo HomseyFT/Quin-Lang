@@ -35,7 +35,15 @@ include "../lib/util.ql";
 
 The resolver parses included files recursively (depth-first) and merges their functions into a single program. A file included twice, directly or through a cycle, is only processed once. Two files defining the same function name is an error.
 
-`std/` currently provides `math.ql`: `abs(x)`, `min(a, b)`, `max(a, b)`, `clamp(x, lo, hi)`. `std/io.ql` and `std/prelude.ql` exist but are empty.
+`std/` provides `math.ql` (integer math), `bits.ql` (bit manipulation), `io.ql` (output helpers), `list.ql` (a linked list of ints), `vec.ql` (a growable int array), and `prelude.ql`, which includes the first three:
+
+```quin
+include "std/prelude.ql";     // math, bits, io
+include "std/list.ql";        // IntList — opt in, it declares a struct
+include "std/vec.ql";         // IntVec  — likewise
+```
+
+The collection modules stay out of the prelude because a struct name is global once included. See [README.md](README.md#multi-file-programs) for what each module contains.
 
 ### Functions
 
@@ -461,6 +469,7 @@ Always available and lowered directly by the compiler; they cannot be shadowed b
 | `heap_load(p: heapptr): int` | Read the word at heap address `p`. |
 | `heap_store(p: heapptr, value: int): void` | Write `value` at heap address `p`. |
 | `gc(): void` | Force a garbage collection. |
+| `panic(msg: str): void` | Stop the program, reporting `msg`. |
 | `ct_eq(a: int, b: int): bool` | Equality, intended to be branchless. |
 | `ct_select(mask: int, x: int, y: int): int` | `x` when `mask` is 1, else `y`. |
 
@@ -526,6 +535,29 @@ gc();
 Forces a garbage collection. Collection also happens on its own whenever an allocation cannot be satisfied, so a program never needs to call this; it exists to make collection happen at a known point, which is useful in tests and when demonstrating the collector.
 
 The collector is precise, sliding, and mark-compact. It traces from every reference reachable in a frame or on the operand stack, so cycles are reclaimed. Survivors are then slid together and every reference rewritten to follow them, which means there is no fragmentation and allocation is always a bump. See [Garbage collection](README.md#garbage-collection) in the README for how roots are found and why moving is safe.
+
+### `panic`
+
+```quin
+panic("index out of range");
+```
+
+Stops the program and reports the message as a runtime error:
+
+```
+Runtime error: index out of range
+```
+
+Nothing else in the language can report a problem, so this is how a function rejects an argument it cannot handle. The standard library uses it throughout rather than returning a plausible wrong answer.
+
+`panic` never returns, and the return checker knows it: a non-void function may end with a `panic` instead of a `return`.
+
+```quin
+fn checked(x: int): int {
+    if (x >= 0) { return x; }
+    panic("checked needs a non-negative value");
+}
+```
 
 ### Heap: `alloc` / `heap_load` / `heap_store`
 

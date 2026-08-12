@@ -17,6 +17,7 @@ The language is intentionally small:
 - Heap intrinsics: `alloc`, `heap_load`, `heap_store`
 - Array helpers: `array_push`, `array_pop`
 - Constant-time-style helpers: `ct_eq`, `ct_select`
+- `panic` to abort with a message, and `gc` to force a collection
 - Inline bytecode via `vm_asm { ... }`
 
 For the precise grammar and the full built-in reference, see [SYNTAX.md](SYNTAX.md).
@@ -48,7 +49,7 @@ A larger tour of arrays, pointers, printing, and boolean logic:
 python3 -m compiler.driver_vm examples/hello.ql
 ```
 
-Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
+Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/stdlib.ql` (a tour of the standard library), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
 
 `main`'s return value becomes the process exit code, so a program can be tested from a shell:
 
@@ -75,7 +76,7 @@ Compile and runtime errors exit 1, which a program returning 1 cannot be disting
 python3 -m unittest discover -s tests -t .
 ```
 
-480 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+556 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -98,7 +99,20 @@ fn main(): int {
 - Includes are resolved depth-first; repeats and cycles are collapsed to a single copy.
 - Defining the same function name in two files is an error.
 
-`std/` currently ships `math.ql` (`abs`, `min`, `max`, `clamp`). `std/io.ql` and `std/prelude.ql` exist but are empty.
+`std/` ships six modules:
+
+| Module | Provides |
+| --- | --- |
+| `std/math.ql` | `abs`, `min`, `max`, `clamp`, `sign`, `is_even`, `is_odd`, `pow`, `gcd`, `lcm`, `isqrt` |
+| `std/bits.ql` | `bit_get` / `bit_set` / `bit_clear` / `bit_toggle`, `popcount`, `reverse_bits`, `leading_zeros`, `trailing_zeros`, `highest_bit`, `rotate_left` / `rotate_right`, `logical_shift_right` |
+| `std/io.ql` | `newline`, `print_repeat`, `print_spaces`, `print_line`, `hex_digit`, `print_hex` / `println_hex`, `print_binary` / `println_binary`, `print_padded` |
+| `std/list.ql` | `IntList`, a persistent singly linked list: `list_push`, `list_len`, `list_get`, `list_sum`, `list_reverse`, `list_contains`, and friends |
+| `std/vec.ql` | `IntVec`, a growable int array on the heap: `vec_new`, `vec_push`, `vec_get`, `vec_set`, `vec_pop`, `vec_reverse`, and friends |
+| `std/prelude.ql` | Includes the three function-only modules above, so one include brings in the common helpers |
+
+The collection modules are not in the prelude, because each declares a struct type and a struct name is global once included. Include those by name when you want them.
+
+Two constraints shaped the library. Arrays cannot be parameters or return types, so anything that crosses a function boundary is built from structs — a linked list, or a `heapptr` field wrapped in one. And strings cannot be measured, indexed, or built at run time, so there is no string module; `std/io.ql` is limited to output helpers assembled from literals.
 
 ---
 
@@ -496,7 +510,7 @@ Codegen never walks scopes. It turns `frame_symbols` into slots and then looks u
 - Logic and control flow: `NOT`, `JMP`, `JZ`, `JNZ`
 - Calls: `CALL`, `RET`
 - Frame-relative pointers: `LOAD_INDIRECT`, `STORE_INDIRECT`, `MEMCPY_LOCALS`, `MEMSET_LOCALS`
-- Heap: `ALLOC`, `ALLOC_TYPED`, `HEAP_LOAD`, `HEAP_STORE`, `HEAP_LOAD_FIELD`, `HEAP_STORE_FIELD`, `GC`
+- Heap: `ALLOC`, `ALLOC_TYPED`, `HEAP_LOAD`, `HEAP_STORE`, `HEAP_LOAD_FIELD`, `HEAP_STORE_FIELD`, `GC`, `PANIC`
 - I/O: `PRINT_INT`, `PRINT_STR`, `PRINTLN_INT`, `PRINTLN_STR`
 
 Calling convention: arguments are pushed left to right and consumed by `CALL` into the callee's leading locals. **Every** function pushes exactly one return value — void functions and void builtins push a dummy `0` that the caller pops — so `RET` is uniform. Each frame records the operand-stack height at entry, and `RET` verifies the balance, which turns a codegen bug into an immediate `Unbalanced operand stack at RET` instead of silent corruption.
@@ -524,6 +538,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_resolver.py` | Include paths, cycles, diamonds, duplicate definitions |
 | `tests/test_structs.py` | Struct declaration, literals, fields, references, null, object layout |
 | `tests/test_gc.py` | What the collector reclaims, what it must not, and operand-stack tagging |
+| `tests/test_stdlib.py` | Every standard library function, its edge cases, and `panic` |
 | `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 
@@ -557,7 +572,7 @@ python3 -m tests.update_golden
   - `codegen_vm.py` — bytecode generation
   - `driver_vm.py` — CLI entry point
 - `runtime/vm.py` — the QuinVM interpreter
-- `std/` — `math.ql`; `io.ql` and `prelude.ql` are placeholders
+- `std/` — `math.ql`, `bits.ql`, `io.ql`, `list.ql`, `vec.ql`, and `prelude.ql`
 - `examples/` — small QL programs, all covered by golden tests
 - `tests/` — the test suite
 
