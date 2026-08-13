@@ -1,0 +1,27 @@
+-- building --
+hello, Ada!
+42
+QL
+-- inspecting --
+19
+quick
+116
+4
+-- escapes --
+a tab:	done
+a quote: "quoted"
+a backslash: \
+-- library --
+THE QUICK BROWN FOX
+desserts
+10
+true
+[padded]
+-1233
+--------
+-- strings in structs --
+Hi, Grace Hopper (45)
+-- after collection --
+Hi, Grace Hopper (45)
+the quick brown fox
+ADA

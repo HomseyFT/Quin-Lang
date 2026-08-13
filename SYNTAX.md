@@ -8,7 +8,7 @@ The reference for QuinLang's surface syntax and built-ins. Programs are compiled
 - **Identifiers**: start with a letter or `_`, then letters, digits, or `_`.
 - **Keywords**: `fn let return if else while for break continue true false null int str void ptr heapptr print println vm_asm include struct`. These cannot be used as identifiers.
 - **Integer literals**: decimal (`123`) or hexadecimal (`0xFF`, `0XFF`). A literal must fit in 16 bits (`0..65535`); larger values are a lex error. There are no negative literals — `-1` is the unary `-` operator applied to `1`.
-- **String literals**: `"..."`, delimited by double quotes, may span lines. There are **no escape sequences**: `\n` inside a string literal is a backslash followed by `n`.
+- **String literals**: `"..."`, delimited by double quotes, may span lines. The escapes `\n`, `\t`, `\r`, `\0`, `\\` and `\"` are recognised; any other character after a backslash is a lex error, so a typo is reported rather than silently kept as two characters.
 - **Whitespace** is insignificant.
 
 ## Program structure
@@ -79,7 +79,7 @@ Compile and runtime errors also exit 1, so a program returning 1 is indistinguis
 | --- | --- |
 | `int` | 16-bit **signed** integer. Wraps on overflow; `/` truncates toward zero. |
 | `bool` | `true` / `false`. Not implicitly convertible to or from `int`. |
-| `str` | String literal, held as an interned id into a string table. |
+| `str` | A string: a heap object holding its length and characters. Built with literals, `+`, slicing and conversion, and collected like any other object. There is no null string. |
 | `ptr` | An address in the current frame, produced by `&`. See [Pointers](#pointers-and-address-of). |
 | `heapptr` | An address in the heap, produced by `alloc`. See [Heap](#heap-alloc--heap_load--heap_store). |
 | `void` | No value. Only valid as a return type. |
@@ -384,6 +384,7 @@ a && b   a || b
 - `^`, `|`, `&`, `<<`, and `>>` are bitwise operators; they require `int` operands and produce an `int`. `&` is binary bitwise AND, not address-of.
 - Comparisons require both operands to have the *same* type; `1 == true` is an error.
 - `&&` and `||` short-circuit — the right operand is not evaluated when the left decides the result.
+- `+` on two `str` operands concatenates them, producing a new string.
 - Comparing two `str` values compares their **content**, so `"apple" < "banana"` is `true`. Ordering is lexicographic by byte and does no case folding, which puts every uppercase letter before every lowercase one: `"Z" < "a"` is `true`.
 - Relational operators do not apply to struct references or `null`; `==` and `!=` do, and compare identity.
 
@@ -468,6 +469,11 @@ Always available and lowered directly by the compiler; they cannot be shadowed b
 | `alloc(size: int): heapptr` | Bump-allocate `size` bytes on the heap. |
 | `heap_load(p: heapptr): int` | Read the word at heap address `p`. |
 | `heap_store(p: heapptr, value: int): void` | Write `value` at heap address `p`. |
+| `str_len(s: str): int` | The number of characters in `s`. |
+| `str_char_at(s: str, i: int): int` | The character code at `i`. Panics if out of range. |
+| `str_slice(s: str, start: int, end: int): str` | A new string with the characters in `[start, end)`. |
+| `int_to_str(x: int): str` | The decimal text of `x`. |
+| `char_to_str(code: int): str` | A one-character string for a code in `0..255`. |
 | `gc(): void` | Force a garbage collection. |
 | `panic(msg: str): void` | Stop the program, reporting `msg`. |
 | `ct_eq(a: int, b: int): bool` | Equality, intended to be branchless. |
@@ -535,6 +541,25 @@ gc();
 Forces a garbage collection. Collection also happens on its own whenever an allocation cannot be satisfied, so a program never needs to call this; it exists to make collection happen at a known point, which is useful in tests and when demonstrating the collector.
 
 The collector is precise, sliding, and mark-compact. It traces from every reference reachable in a frame or on the operand stack, so cycles are reclaimed. Survivors are then slid together and every reference rewritten to follow them, which means there is no fragmentation and allocation is always a bump. See [Garbage collection](README.md#garbage-collection) in the README for how roots are found and why moving is safe.
+
+### Strings
+
+```quin
+let name: str = "Ada";
+let greeting: str = "hello, " + name + "!";
+println(str_len(greeting));            // 12
+println(str_slice(greeting, 7, 10));   // Ada
+println(str_char_at(name, 0));         // 65
+println(int_to_str(42) + "!");         // 42!
+```
+
+A string is a heap object, so building one allocates and the collector reclaims it when nothing refers to it. Literals are materialised into the heap at start-up and live for the whole run.
+
+- Characters are bytes. `str_char_at` gives a code in `0..255` and `char_to_str` turns one back; there is no `char` type.
+- `str_slice` takes a half-open range, so `str_slice(s, 0, str_len(s))` is the whole string and `str_slice(s, i, i)` is empty. A range outside the string panics.
+- An uninitialised `str` is the empty string. There is no null string, and `null` is not assignable to a `str`.
+- A string may contain a nul: the length is stored in the object, so `\0` is an ordinary character rather than a terminator.
+- `std/string.ql` builds searching, trimming, case conversion and parsing on top of these.
 
 ### `panic`
 

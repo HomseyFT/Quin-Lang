@@ -392,7 +392,9 @@ class TestStrings(QuinTestCase):
     def test_printed_verbatim(self):
         self.assertOutput('fn main(): int { print("a$b"); return 0; }', "a$b")
 
-    def test_interning_reuses_ids(self):
+    def test_literals_are_interned(self):
+        # Equal literals share one table entry, so the VM materialises one
+        # string object for them rather than one per occurrence.
         _, _, strings, _ = compile_source(
             'fn main(): int { print("dup"); print("dup"); print("other"); return 0; }'
         )

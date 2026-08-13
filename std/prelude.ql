@@ -14,3 +14,4 @@
 include "std/math.ql";
 include "std/bits.ql";
 include "std/io.ql";
+include "std/string.ql";

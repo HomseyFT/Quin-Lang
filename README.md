@@ -49,7 +49,7 @@ A larger tour of arrays, pointers, printing, and boolean logic:
 python3 -m compiler.driver_vm examples/hello.ql
 ```
 
-Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/stdlib.ql` (a tour of the standard library), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
+Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/stdlib.ql` (a tour of the standard library), `examples/strings.ql` (building and inspecting strings), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
 
 `main`'s return value becomes the process exit code, so a program can be tested from a shell:
 
@@ -76,7 +76,7 @@ Compile and runtime errors exit 1, which a program returning 1 cannot be disting
 python3 -m unittest discover -s tests -t .
 ```
 
-556 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+623 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -105,6 +105,7 @@ fn main(): int {
 | --- | --- |
 | `std/math.ql` | `abs`, `min`, `max`, `clamp`, `sign`, `is_even`, `is_odd`, `pow`, `gcd`, `lcm`, `isqrt` |
 | `std/bits.ql` | `bit_get` / `bit_set` / `bit_clear` / `bit_toggle`, `popcount`, `reverse_bits`, `leading_zeros`, `trailing_zeros`, `highest_bit`, `rotate_left` / `rotate_right`, `logical_shift_right` |
+| `std/string.ql` | Searching, slicing, case conversion, trimming, parsing, and character predicates |
 | `std/io.ql` | `newline`, `print_repeat`, `print_spaces`, `print_line`, `hex_digit`, `print_hex` / `println_hex`, `print_binary` / `println_binary`, `print_padded` |
 | `std/list.ql` | `IntList`, a persistent singly linked list: `list_push`, `list_len`, `list_get`, `list_sum`, `list_reverse`, `list_contains`, and friends |
 | `std/vec.ql` | `IntVec`, a growable int array on the heap: `vec_new`, `vec_push`, `vec_get`, `vec_set`, `vec_pop`, `vec_reverse`, and friends |
@@ -112,7 +113,7 @@ fn main(): int {
 
 The collection modules are not in the prelude, because each declares a struct type and a struct name is global once included. Include those by name when you want them.
 
-Two constraints shaped the library. Arrays cannot be parameters or return types, so anything that crosses a function boundary is built from structs — a linked list, or a `heapptr` field wrapped in one. And strings cannot be measured, indexed, or built at run time, so there is no string module; `std/io.ql` is limited to output helpers assembled from literals.
+Two constraints shaped the library. Arrays cannot be parameters or return types, so anything that crosses a function boundary is built from structs — a linked list, or a `heapptr` field wrapped in one. Strings, by contrast, are now first-class heap objects, which is what makes `std/string.ql` possible at all.
 
 ---
 
@@ -124,7 +125,7 @@ This is a quick tour; [SYNTAX.md](SYNTAX.md) is the reference.
 
 - `int` — 16-bit **signed** integer. Arithmetic wraps (`32767 + 1` is `-32768`), and `/` truncates toward zero.
 - `bool` — `true` / `false`. Not interchangeable with `int`: conditions must be `bool`, and `true + 1` is a type error.
-- `str` — a string literal, held as an interned id into a string table.
+- `str` — a string: a heap object holding its length and its characters. Literals, concatenation, slicing and conversion all produce one, and the collector reclaims them. See [Strings](#strings).
 - `ptr` — an address in the current frame, produced by `&`.
 - `heapptr` — an address in the heap, produced by `alloc`.
 - `void` — no value; only valid as a return type.
@@ -330,6 +331,40 @@ println(n.value);      // Runtime error: Null pointer dereference reading a fiel
 
 Rules worth knowing: a literal must give every field exactly once, in any order; fields are read and written but a struct has no value form for `print`; relational operators (`<`, `>`, …) do not apply to references; and a struct cannot have array-typed or `void` fields.
 
+### Strings
+
+A string is a heap object: a header carrying its length, then its characters, one byte each. A `str` value is that object's address, so strings are allocated, moved and reclaimed exactly like structs.
+
+```quin
+let name: str = "Ada";
+let greeting: str = "hello, " + name + "!";
+println(str_len(greeting));           // 12
+println(str_slice(greeting, 7, 10));  // Ada
+println(int_to_str(42) + "!");        // 42!
+```
+
+- `+` on two strings builds a new one.
+- `str_len`, `str_char_at`, `str_slice`, `int_to_str` and `char_to_str` are builtins; everything else lives in `std/string.ql`.
+- A character is a byte, so `str_char_at` gives a code in `0..255` and `char_to_str` turns one back. There is no `char` type.
+- Comparison reads the characters, so `==` and the ordering operators work on built strings and literals alike.
+
+Literals are interned at compile time and materialised into the heap when the program starts. Their addresses are permanent roots — a literal is named by the bytecode rather than by any variable, so nothing else would keep it alive.
+
+Everything else is ordinary garbage:
+
+```quin
+// 20000 strings through a 64 KiB heap, because they are collected
+for (let i = 0; i < 20000; i = i + 1) {
+    let s: str = int_to_str(i);
+}
+```
+
+A string holds characters and never references, so the collector keeps one alive without tracing into it — the same treatment a block from `alloc` gets.
+
+Unlike the other heap types, **there is no null string**. An uninitialised `str` is the empty string, matching `int` starting at zero, so no string operation needs a null check and `null` is not assignable to a `str`.
+
+String literals support the escapes `\n`, `\t`, `\r`, `\0`, `\\` and `\"`. An unrecognised escape is a lex error rather than a silently preserved backslash.
+
 ### The two address spaces
 
 QuinLang has two kinds of memory, and they are **separate types** so that an address from one cannot be used with the other.
@@ -511,6 +546,7 @@ Codegen never walks scopes. It turns `frame_symbols` into slots and then looks u
 - Calls: `CALL`, `RET`
 - Frame-relative pointers: `LOAD_INDIRECT`, `STORE_INDIRECT`, `MEMCPY_LOCALS`, `MEMSET_LOCALS`
 - Heap: `ALLOC`, `ALLOC_TYPED`, `HEAP_LOAD`, `HEAP_STORE`, `HEAP_LOAD_FIELD`, `HEAP_STORE_FIELD`, `GC`, `PANIC`
+- Strings: `LOAD_STR`, `STR_CMP`, `STR_LEN`, `STR_CHAR_AT`, `STR_CONCAT`, `STR_SLICE`, `STR_FROM_INT`, `STR_FROM_CHAR`
 - I/O: `PRINT_INT`, `PRINT_STR`, `PRINTLN_INT`, `PRINTLN_STR`
 
 Calling convention: arguments are pushed left to right and consumed by `CALL` into the callee's leading locals. **Every** function pushes exactly one return value — void functions and void builtins push a dummy `0` that the caller pops — so `RET` is uniform. Each frame records the operand-stack height at entry, and `RET` verifies the balance, which turns a codegen bug into an immediate `Unbalanced operand stack at RET` instead of silent corruption.
@@ -539,6 +575,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_structs.py` | Struct declaration, literals, fields, references, null, object layout |
 | `tests/test_gc.py` | What the collector reclaims, what it must not, and operand-stack tagging |
 | `tests/test_stdlib.py` | Every standard library function, its edge cases, and `panic` |
+| `tests/test_strings.py` | Escapes, string construction, the heap representation, and collection |
 | `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 

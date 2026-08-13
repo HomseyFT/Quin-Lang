@@ -46,9 +46,29 @@ class TestStrings(QuinTestCase):
     def test_basic(self):
         self.assertEqual(literals('"hello"'), ["hello"])
 
-    def test_no_escape_sequences(self):
-        # Backslash-n is two characters, not a newline. Documented behavior.
-        self.assertEqual(literals(r'"a\nb"'), [r"a\nb"])
+    def test_escape_sequences(self):
+        self.assertEqual(literals(r'"a\nb"'), ["a\nb"])
+        self.assertEqual(literals(r'"a\tb"'), ["a\tb"])
+        self.assertEqual(literals(r'"a\rb"'), ["a\rb"])
+        self.assertEqual(literals(r'"a\0b"'), ["a\0b"])
+
+    def test_escaped_backslash_is_one_character(self):
+        self.assertEqual(literals(r'"a\\b"'), ["a\\b"])
+
+    def test_escaped_quote_does_not_end_the_literal(self):
+        self.assertEqual(literals(r'"say \"hi\" now"'), ['say "hi" now'])
+
+    def test_unknown_escape_is_an_error(self):
+        # Keeping the backslash would silently produce two characters instead
+        # of reporting the typo.
+        with self.assertRaises(LexError) as cm:
+            Lexer(r'"a\qb"').tokenize()
+        self.assertIn("Unknown escape sequence", str(cm.exception))
+
+    def test_a_literal_ending_in_a_backslash_is_unterminated(self):
+        with self.assertRaises(LexError) as cm:
+            Lexer(r'"oops\"').tokenize()
+        self.assertIn("Unterminated string", str(cm.exception))
 
     def test_may_span_lines(self):
         self.assertEqual(literals('"a\nb"'), ["a\nb"])
