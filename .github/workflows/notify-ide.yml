@@ -1,15 +1,19 @@
 name: Notify IDE of Changes
 
+# Runs after CI rather than on push, so a commit that breaks the compiler never
+# reaches the editor. The trade-off is that the path filter this used to have is
+# gone: workflow_run carries no paths option, and reconstructing the pushed range
+# from its payload is guesswork on a multi-commit push. Syncing after a docs-only
+# change is harmless; skipping a real one is not.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [master, main]
-    paths:
-      - 'compiler/**'
-      - 'runtime/**'
-      - 'examples/**'
 
 jobs:
   notify:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Trigger IDE Sync
@@ -18,4 +22,7 @@ jobs:
           token: ${{ secrets.IDE_SYNC }}
           repository: ${{ github.repository_owner }}/QuinLang-Text-Editor
           event-type: compiler-updated
-          client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
+          # The commit CI actually tested, not whatever master points at now.
+          # workflow_run reports a bare branch name, so the ref is rebuilt to
+          # keep the payload identical in shape to what the editor already gets.
+          client-payload: '{"ref": "refs/heads/${{ github.event.workflow_run.head_branch }}", "sha": "${{ github.event.workflow_run.head_sha }}"}'

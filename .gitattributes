@@ -1,0 +1,7 @@
+# Golden files are compared byte for byte against program output, so the
+# fixtures must check out identically on every platform.
+*.py   text eol=lf
+*.ql   text eol=lf
+*.out  text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf

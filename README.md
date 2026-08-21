@@ -1,5 +1,7 @@
 # QuinLang (QL)
 
+[![CI](https://github.com/HomseyFT/QuinLang/actions/workflows/ci.yml/badge.svg)](https://github.com/HomseyFT/QuinLang/actions/workflows/ci.yml)
+
 QuinLang is a tiny, C-style language and compiler that I built to learn about parsing, type checking, and code generation from the ground up.
 
 It compiles to bytecode for **QuinVM**, a stack machine written in Python. The whole toolchain is one `python3 -m` invocation with no third-party dependencies.
@@ -76,7 +78,7 @@ Compile and runtime errors exit 1, which a program returning 1 cannot be disting
 python3 -m unittest discover -s tests -t .
 ```
 
-627 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+632 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -593,6 +595,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_strings.py` | Escapes, string construction, the heap representation, and collection |
 | `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
+| `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
 
 Tests are written as QuinLang source strings and asserted on their output or their error message, so they exercise the whole pipeline rather than one pass:
 
@@ -607,6 +610,22 @@ Golden files live in `tests/golden/`. After an intentional change to an example 
 ```bash
 python3 -m tests.update_golden
 ```
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs the suite on every push to `master` and every pull request, across six jobs:
+
+| | |
+| --- | --- |
+| Ubuntu | Python 3.10, 3.11, 3.12, 3.13 |
+| Windows | Python 3.12 |
+| macOS | Python 3.12 |
+
+3.10 is the floor because `compiler/ast.py` uses `dataclasses.field(kw_only=True)`. Windows earns a job because `process_exit_code` exists specifically for it: POSIX truncates an exit status to its low byte anyway, so on Linux the masking is invisible and only a real Windows run exercises the difference.
+
+There is no dependency-install step, because there are no dependencies. `tests/test_no_dependencies.py` fails the build if an import outside the standard library ever appears, so that stays true by construction rather than by good intentions.
+
+`.github/workflows/notify-ide.yml` tells the `QuinLang-Text-Editor` repo about a new compiler. It waits on a green CI run instead of firing on the push directly, so a commit that breaks the compiler is never handed to the editor. That costs the path filter it used to have — `workflow_run` has no `paths` option — so a docs-only push now syncs too. That is the cheaper mistake.
 
 ---
 

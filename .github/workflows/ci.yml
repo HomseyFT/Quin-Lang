@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes an in-flight run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report every broken combination, not just the first one to fail.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          # The driver masks main's return value because Windows exit codes are
+          # 32 bits wide where POSIX already truncates to 8. That difference is
+          # only actually exercised by running there.
+          - os: windows-latest
+            python: "3.12"
+          - os: macos-latest
+            python: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # No install step, and no caching to make one faster: QuinLang runs on a
+      # stock interpreter. tests/test_no_dependencies.py fails the build if an
+      # import outside the standard library ever appears.
+
+      - name: Run the test suite
+        run: python -m unittest discover -s tests -t .
+
+      - name: Compile and run an example through the CLI
+        # The suite runs examples in-process; this covers the documented
+        # command itself, including that a clean program exits 0.
+        run: python -m compiler.driver_vm examples/hello.ql
