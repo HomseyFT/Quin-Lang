@@ -462,7 +462,7 @@ class TestStructErrors(QuinTestCase):
     def test_struct_is_not_printable(self):
         self.assertCompileError(
             POINT + "fn main(): int { let p = Point { x: 1, y: 2 }; println(p); return 0; }",
-            "print/println expect int, str, or bool",
+            "print/println expect int, float, str, or bool",
         )
 
     def test_struct_cannot_be_compared_relationally(self):

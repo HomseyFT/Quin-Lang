@@ -3,9 +3,9 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 from . import ast as A
 from .compiler_types import (
-    Type, Int, Str, Void, Bool, Ptr, HeapPtr, Null, StructInfo, StructField,
+    Type, Int, Str, Float, Void, Bool, Ptr, HeapPtr, Null, StructInfo, StructField,
     type_from_name, is_array_type, array_length, is_struct_type, is_reference_type,
-    assignable, comparable, BUILTIN_TYPES, UnknownTypeError,
+    assignable, comparable, word_count, BUILTIN_TYPES, UnknownTypeError,
 )
 from .builtins import get_builtins
 
@@ -212,7 +212,8 @@ class SemanticAnalyzer:
             info = self.ctx.structs[sd.name]
             fields: List[StructField] = []
             seen: Dict[str, bool] = {}
-            for offset, f in enumerate(sd.fields):
+            offset = 0
+            for f in sd.fields:
                 if f.name in seen:
                     raise SemanticError(
                         f"Duplicate field '{f.name}' in struct '{sd.name}'", f.line, f.col
@@ -230,6 +231,9 @@ class SemanticAnalyzer:
                         f"Field '{f.name}' cannot have type void", f.line, f.col
                     )
                 fields.append(StructField(f.name, ft, offset))
+                # Offsets are word offsets, and a float field is two words
+                # wide, so this is a running total rather than the field index.
+                offset += word_count(ft)
             info.fields = fields
 
     def analyze(self, program: A.Program) -> Context:
@@ -369,9 +373,10 @@ class SemanticAnalyzer:
             val_t = self._analyze_expr(st.value, scope)
             # bool prints as "true"/"false"; the VM backend lowers it via a
             # branch into the string table.
-            if val_t not in (Int, Str, Bool):
+            if val_t not in (Int, Str, Bool, Float):
                 raise SemanticError(
-                    f"print/println expect int, str, or bool, got {val_t}", st.line, st.col
+                    f"print/println expect int, float, str, or bool, got {val_t}",
+                    st.line, st.col
                 )
         elif isinstance(st, A.Return):
             if ret_type == Void and st.value is not None:
@@ -559,6 +564,9 @@ class SemanticAnalyzer:
             if isinstance(e.value, int):
                 self.ctx.set_type(e, Int)
                 return Int
+            if isinstance(e.value, float):
+                self.ctx.set_type(e, Float)
+                return Float
             if isinstance(e.value, str):
                 self.ctx.set_type(e, Str)
                 return Str
@@ -576,6 +584,9 @@ class SemanticAnalyzer:
             if e.op == '-' and t == Int:
                 self.ctx.set_type(e, Int)
                 return Int
+            if e.op == '-' and t == Float:
+                self.ctx.set_type(e, Float)
+                return Float
             if e.op == '!' and t == Bool:
                 self.ctx.set_type(e, Bool)
                 return Bool
@@ -611,36 +622,78 @@ class SemanticAnalyzer:
                 if lt == Int and rt == Int:
                     self.ctx.set_type(e, Int)
                     return Int
-                raise SemanticError("Arithmetic operators require int operands", e.line, e.col)
+                if lt == Float and rt == Float:
+                    self.ctx.set_type(e, Float)
+                    return Float
+                # int and float do not mix implicitly. A silent widening would
+                # make `n / 2` mean different things depending on a declaration
+                # elsewhere; int_to_float makes the choice visible.
+                if {lt, rt} == {Int, Float}:
+                    raise SemanticError(
+                        "Cannot mix int and float; convert explicitly with "
+                        "int_to_float or float_to_int",
+                        e.line, e.col,
+                    )
+                raise SemanticError("Arithmetic operators require int or float operands", e.line, e.col)
             if e.op == '%':
                 if lt == Int and rt == Int:
                     self.ctx.set_type(e, Int)
                     return Int
+                if lt == Float or rt == Float:
+                    raise SemanticError(
+                        "'%' does not apply to float; convert with float_to_int first",
+                        e.line, e.col,
+                    )
                 raise SemanticError("Modulo operator requires int operands", e.line, e.col)
             if e.op == '^':
                 if lt == Int and rt == Int:
                     self.ctx.set_type(e, Int)
                     return Int
+                if lt == Float or rt == Float:
+                    raise SemanticError(
+                        "'^' does not apply to float; convert with float_to_int first",
+                        e.line, e.col,
+                    )
                 raise SemanticError("Bitwise XOR operator requires int operands", e.line, e.col)
             if e.op == '&':
                 if lt == Int and rt == Int:
                     self.ctx.set_type(e, Int)
                     return Int
+                if lt == Float or rt == Float:
+                    raise SemanticError(
+                        "'&' does not apply to float; convert with float_to_int first",
+                        e.line, e.col,
+                    )
                 raise SemanticError("Bitwise AND operator requires int operands", e.line, e.col)
             if e.op == '|':
                 if lt == Int and rt == Int:
                     self.ctx.set_type(e, Int)
                     return Int
+                if lt == Float or rt == Float:
+                    raise SemanticError(
+                        "'|' does not apply to float; convert with float_to_int first",
+                        e.line, e.col,
+                    )
                 raise SemanticError("Bitwise OR operator requires int operands", e.line, e.col)
             if e.op == '<<':
                 if lt == Int and rt == Int:
                     self.ctx.set_type(e, Int)
                     return Int
+                if lt == Float or rt == Float:
+                    raise SemanticError(
+                        "'<<' does not apply to float; convert with float_to_int first",
+                        e.line, e.col,
+                    )
                 raise SemanticError("Left shift operator requires int operands", e.line, e.col)
             if e.op == '>>':
                 if lt == Int and rt == Int:
                     self.ctx.set_type(e, Int)
                     return Int
+                if lt == Float or rt == Float:
+                    raise SemanticError(
+                        "'>>' does not apply to float; convert with float_to_int first",
+                        e.line, e.col,
+                    )
                 raise SemanticError("Right shift operator requires int operands", e.line, e.col)
             if e.op in ('==', '!='):
                 # Equality is the one place null may meet a reference type.
@@ -683,6 +736,16 @@ class SemanticAnalyzer:
                         f"Cannot take the address of '{e.target.name}': it holds a "
                         f"{sym.type} reference, and a reference cannot be converted "
                         f"to an int",
+                        e.target.line, e.target.col,
+                    )
+                # A ptr addresses one slot, and a float is two. The pointer
+                # would silently name the low half, so load16 would read half a
+                # value and store16 would corrupt one. Nothing about the ptr
+                # type can express the difference, so the address is refused.
+                if sym.type == Float:
+                    raise SemanticError(
+                        f"Cannot take the address of '{e.target.name}': a float is "
+                        f"two slots wide and a ptr addresses one",
                         e.target.line, e.target.col,
                     )
                 self.ctx.bind(e.target, sym)

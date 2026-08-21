@@ -1,0 +1,25 @@
+-- arithmetic --
+1.75
+6.0
+-1.5
+-- single precision --
+0.33333334
+1.0000001
+false
+true
+-- conversion --
+7.0
+3
+-3
+half of 7 is 3.5
+-- structs --
+unit-ish
+12.56636
+28.274311
+-- std/float.ql --
+2.5
+1.5
+-3.0
+3.0
+3.0
+1024.0

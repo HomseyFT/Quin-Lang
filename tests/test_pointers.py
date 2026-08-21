@@ -595,13 +595,13 @@ class TestHeapPointerArithmetic(QuinTestCase):
     def test_multiplying_a_heapptr_is_rejected(self):
         self.assertCompileError(
             "fn main(): int { let h: heapptr; h = alloc(4); h = h * 2; return 0; }",
-            "require int operands",
+            "require int or float operands",
         )
 
     def test_ptr_arithmetic_is_rejected(self):
         self.assertCompileError(
             "fn main(): int { let x: int; let p: ptr; x = 1; p = @x; p = p + 1; return 0; }",
-            "require int operands",
+            "require int or float operands",
         )
 
 

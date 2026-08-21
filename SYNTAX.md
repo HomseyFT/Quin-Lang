@@ -8,6 +8,7 @@ The reference for QuinLang's surface syntax and built-ins. Programs are compiled
 - **Identifiers**: start with a letter or `_`, then letters, digits, or `_`.
 - **Keywords**: `fn let return if else while for break continue true false null int str void ptr heapptr print println vm_asm include struct`. These cannot be used as identifiers.
 - **Integer literals**: decimal (`123`) or hexadecimal (`0xFF`, `0XFF`). A literal must fit in 16 bits (`0..65535`); larger values are a lex error. There are no negative literals — `-1` is the unary `-` operator applied to `1`.
+- **Float literals**: digits, a `.`, then digits — `1.5`, `3.0`. Both sides are required: `1.` is a lex error, and `.5` does not parse as an expression at all. There is no exponent notation; `1e5` is a lex error rather than lexing as `1` followed by `e5`. A literal too large for a 32-bit float is rejected.
 - **String literals**: `"..."`, delimited by double quotes, may span lines. The escapes `\n`, `\t`, `\r`, `\0`, `\\` and `\"` are recognised; any other character after a backslash is a lex error, so a typo is reported rather than silently kept as two characters.
 - **Whitespace** is insignificant.
 
@@ -78,6 +79,7 @@ A compile error exits `2` and a runtime error exits `3`, so the tool's own failu
 | Type | Meaning |
 | --- | --- |
 | `int` | 16-bit **signed** integer. Wraps on overflow; `/` truncates toward zero. |
+| `float` | 32-bit IEEE 754 single precision, about seven significant digits. Two slots wide. Never mixes with `int` implicitly. See [Floats](#floats). |
 | `bool` | `true` / `false`. Not implicitly convertible to or from `int`. |
 | `str` | A string: a heap object holding its length and characters. Built with literals, `+`, slicing and conversion, and collected like any other object. There is no null string. |
 | `ptr` | An address in the current frame, produced by `&`. See [Pointers](#pointers-and-address-of). |
@@ -280,6 +282,46 @@ Depth may rise and fall freely in between; only the ends and the floor are const
 
 `NAME` must be a scalar local or parameter in scope; arrays are rejected — index them explicitly. Anything outside this table, including `mod`, is a codegen error. Note that this is a subset of the VM's opcodes; see [README.md](README.md#quinvm-bytecode) for the full set.
 
+## Floats
+
+```quin
+let x: float = 1.5;
+let y: float = 0.25;
+
+println(x + y);        // 1.75
+println(x * y);        // 0.375
+println(x >= y);       // true
+```
+
+`+ - * /` and all six comparisons work on two floats. `%` and the bitwise and shift operators do not — they are integer operations, and applying one to a float is a semantic error naming `float_to_int`.
+
+`float` never mixes with `int`. `x + 1` where `x` is a float is an error, not an implicit widening:
+
+```
+Semantic error: Cannot mix int and float; convert explicitly with int_to_float or float_to_int
+```
+
+`int_to_float` and `float_to_int` are the whole bridge between them; `float_to_int` truncates toward zero, matching integer `/`, and faults if the result leaves the 16-bit int range.
+
+Two operations fault rather than yielding a value:
+
+- **Division by zero** — as integer `/` already does.
+- **Overflow past the 32-bit range** — because an infinity would make every later comparison quietly wrong, and there is no way to say so in a result.
+
+### Float restrictions
+
+A float is two slots wide, and each of the following addresses exactly one slot, so each is rejected rather than silently working on half a value:
+
+| Written | Result |
+| --- | --- |
+| `let a: float[3];` | `Only int arrays exist; 'float[N]' is not a type` |
+| `@x` where `x` is a float | `a float is two slots wide and a ptr addresses one` |
+| `vm_asm { load_local x; }` | `'x' is a float, which is two slots wide; vm_asm only moves one` |
+
+A float **may** be a struct field, a parameter, a return type, and a local. `main` may not return one — an exit code is an int.
+
+Printing gives the shortest decimal that reads back as the same 32-bit value, always with a decimal point, so `3.0` never looks like an int. `float_to_str` produces that same text.
+
 ## Structs
 
 ```quin
@@ -481,6 +523,9 @@ Always available and lowered directly by the compiler; they cannot be shadowed b
 | `str_slice(s: str, start: int, end: int): str` | A new string with the characters in `[start, end)`. |
 | `int_to_str(x: int): str` | The decimal text of `x`. |
 | `char_to_str(code: int): str` | A one-character string for a code in `0..255`. |
+| `int_to_float(n: int): float` | Widen an int. The only implicit-free way into `float`. |
+| `float_to_int(x: float): int` | Truncate toward zero. Faults if the result is outside `-32768..32767`. |
+| `float_to_str(x: float): str` | The same text `println` would print. |
 | `gc(): void` | Force a garbage collection. |
 | `panic(msg: str): void` | Stop the program, reporting `msg`. |
 | `ct_eq(a: int, b: int): bool` | Equality, intended to be branchless. |
@@ -636,7 +681,8 @@ println(ct_select(0, a, b));   // 20
 - Array indexing is bounds-checked: a literal index outside the array is a compile error, and a computed one faults at run time. `array_push` and `array_pop` are checked the same way, against the index they touch — `len` for a push, `len - 1` for a pop.
 - Pointers are untyped within their address space: a `ptr` is just a slot index, and nothing checks what kind of data lives there.
 - Pointers do not outlive the frame they point into.
-- `int` is the only numeric type: 16-bit, signed, wrapping.
+- `int` wraps at 16 bits; `float` is 32-bit single precision, and its two failure cases (division by zero, overflow) fault instead of producing infinity.
+- A `float` is two slots wide, so there are no `float[N]` arrays, `@` does not apply to one, and `vm_asm` cannot name one.
 - Comparing `str` values compares content. Ordering is lexicographic by byte, with no case folding, so `"Z" < "a"` is `true`.
 - No methods, no arrays of structs, and no array-typed struct fields.
 - The collector compacts, so there is no fragmentation: every free byte is usable no matter how scattered the garbage was. Objects move, but a `heapptr` is rewritten to follow its object, so it stays valid.

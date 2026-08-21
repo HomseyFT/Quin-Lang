@@ -1,10 +1,13 @@
 from __future__ import annotations
+import struct
 from dataclasses import dataclass, field
 from typing import Dict, List
 from . import ast as A
 from .bytecode import OpCode, Instruction, Bytecode
 from .sema import Context, Symbol
-from .compiler_types import Int, Str, Bool, Void, array_length, is_reference_type
+from .compiler_types import (
+    Int, Str, Bool, Float, Void, array_length, is_reference_type, word_count,
+)
 
 
 COMPARISONS = ("==", "!=", "<", "<=", ">", ">=")
@@ -49,7 +52,12 @@ class LoopContext:
 class FunctionLayout:
     name: str
     num_locals: int
+    # Arguments, which is also how many operand-stack entries CALL pops: a
+    # float is one entry there even though it is two slots once stored.
     num_params: int
+    # Slots each parameter occupies, in order. CALL needs it to scatter one
+    # entry per argument into leading locals of differing width.
+    param_words: tuple = ()
     entry_pc: int = 0
     # Slots in this frame that hold heap references, for the GC stack map.
     ref_slots: List[int] = field(default_factory=list)
@@ -123,6 +131,24 @@ class CodeGenVM:
             raise CodegenError(f"[{e.line}:{e.col}] '{e.name}' is not an array")
         return slot
 
+    @staticmethod
+    def _is_float(node, ctx: Context) -> bool:
+        """Whether codegen should use the float form of an opcode here.
+
+        Sema typed every expression, so this is a lookup rather than a guess.
+        A node sema never typed (an assignment target, say) is not a float.
+        """
+        return ctx.node_type.get(id(node)) == Float
+
+    @staticmethod
+    def _float_bits(value: float) -> int:
+        """A Python float as the 32-bit IEEE 754 pattern the VM stores.
+
+        The lexer already rejected a literal too large for a float, so the
+        pack cannot overflow here.
+        """
+        return struct.unpack("<I", struct.pack("<f", value))[0]
+
     # -- entry point -----------------------------------------------------
 
     def generate(self, program: A.Program, ctx: Context):
@@ -141,7 +167,7 @@ class CodeGenVM:
         from runtime.vm import FunctionInfo, StructLayout
         fns = [
             FunctionInfo(fl.name, fl.entry_pc, fl.num_locals, fl.num_params,
-                         tuple(fl.ref_slots))
+                         tuple(fl.ref_slots), fl.param_words)
             for fl in self.functions
         ]
         # The struct table doubles as the collector's object map: it gives an
@@ -176,12 +202,15 @@ class CodeGenVM:
             slots[sym] = LocalSlot(next_idx, length)
             if is_reference_type(sym.type):
                 ref_slots.append(next_idx)
-            next_idx += length if length else 1
+            # An array is `length` int slots; anything else is as wide as its
+            # type, which is one slot for everything but float.
+            next_idx += length if length else word_count(sym.type)
 
         return FunctionLayout(
             name=fn.name,
             num_locals=next_idx,
             num_params=len(fn.params),
+            param_words=tuple(word_count(sym.type) for sym in symbols[:len(fn.params)]),
             slots=slots,
             ref_slots=ref_slots,
         )
@@ -207,15 +236,23 @@ class CodeGenVM:
                 # `let x = x + 1;` reads the outer x: sema resolved the
                 # initializer's identifiers before defining this one, so they
                 # already point at the outer symbol.
+                sym = ctx.binding_of(st)
+                declared_float = sym is not None and sym.type == Float
                 if st.init is not None:
                     self._emit_expr(st.init, layout, ctx)
-                elif ctx.binding_of(st) is not None and ctx.binding_of(st).type == Str:
+                elif sym is not None and sym.type == Str:
                     # Zero would be the null address. A str has no null, so an
                     # uninitialised one is the empty string.
                     self.code.append(Instruction(OpCode.LOAD_STR, self._add_string("")))
+                elif declared_float:
+                    # All-zero bits are 0.0, but PUSH_INT would leave a 16-bit
+                    # zero where a 32-bit pattern belongs.
+                    self.code.append(Instruction(OpCode.PUSH_FLOAT, 0))
                 else:
                     self.code.append(Instruction(OpCode.PUSH_INT, 0))
-                self.code.append(Instruction(OpCode.STORE_LOCAL, slot.index))
+                self.code.append(Instruction(
+                    OpCode.STORE_LOCAL_F if declared_float else OpCode.STORE_LOCAL,
+                    slot.index))
         elif isinstance(st, A.Assign):
             if isinstance(st.target, A.Identifier):
                 slot = self._slot(st.target, layout, ctx)
@@ -224,7 +261,9 @@ class CodeGenVM:
                         f"[{st.target.line}:{st.target.col}] Cannot assign to array '{st.target.name}' as a whole"
                     )
                 self._emit_expr(st.value, layout, ctx)
-                self.code.append(Instruction(OpCode.STORE_LOCAL, slot.index))
+                self.code.append(Instruction(
+                    OpCode.STORE_LOCAL_F if self._is_float(st.value, ctx) else OpCode.STORE_LOCAL,
+                    slot.index))
             elif isinstance(st.target, A.Index):
                 slot = self._array_slot(st.target.array, layout, ctx)
                 # STORE_LOCAL_IDX pops the index, then the value.
@@ -237,7 +276,9 @@ class CodeGenVM:
                 fld = self._field_of(st.target, ctx)
                 self._emit_expr(st.target.obj, layout, ctx)
                 self._emit_expr(st.value, layout, ctx)
-                self.code.append(Instruction(OpCode.HEAP_STORE_FIELD, fld.offset))
+                self.code.append(Instruction(
+                    OpCode.HEAP_STORE_FIELD_F if fld.type == Float else OpCode.HEAP_STORE_FIELD,
+                    fld.offset))
             else:
                 raise CodegenError(f"[{st.line}:{st.col}] Invalid assignment target")
         elif isinstance(st, A.Print):
@@ -245,6 +286,8 @@ class CodeGenVM:
             t = ctx.get_type(st.value)
             if t == Str:
                 self.code.append(Instruction(OpCode.PRINT_STR))
+            elif t == Float:
+                self.code.append(Instruction(OpCode.PRINT_FLOAT))
             elif t == Bool:
                 self._emit_bool_to_str()
                 self.code.append(Instruction(OpCode.PRINT_STR))
@@ -255,6 +298,8 @@ class CodeGenVM:
             t = ctx.get_type(st.value)
             if t == Str:
                 self.code.append(Instruction(OpCode.PRINTLN_STR))
+            elif t == Float:
+                self.code.append(Instruction(OpCode.PRINTLN_FLOAT))
             elif t == Bool:
                 self._emit_bool_to_str()
                 self.code.append(Instruction(OpCode.PRINTLN_STR))
@@ -475,6 +520,14 @@ class CodeGenVM:
                     raise CodegenError(
                         f"[{vm_asm.line}:{vm_asm.col}] vm_asm {op}: '{name}' is an array; index it explicitly"
                     )
+                if sym.type == Float:
+                    # load_local moves one slot, and a float is two. There is
+                    # no float instruction in this table, so the block would
+                    # silently work on half the value.
+                    raise CodegenError(
+                        f"[{vm_asm.line}:{vm_asm.col}] vm_asm {op}: '{name}' is a float, "
+                        f"which is two slots wide; vm_asm only moves one"
+                    )
                 opcode, pops, pushes = local_ops[op]
                 self.code.append(Instruction(opcode, slot.index))
             elif op in simple_ops and not args:
@@ -524,6 +577,8 @@ class CodeGenVM:
                 self.code.append(Instruction(OpCode.PUSH_INT, 1 if e.value else 0))
             elif isinstance(e.value, int):
                 self.code.append(Instruction(OpCode.PUSH_INT, e.value & 0xFFFF))
+            elif isinstance(e.value, float):
+                self.code.append(Instruction(OpCode.PUSH_FLOAT, self._float_bits(e.value)))
             elif isinstance(e.value, str):
                 # A str value is the heap address of a string object, which
                 # only exists once the VM has materialised the literal table.
@@ -538,7 +593,9 @@ class CodeGenVM:
                 raise CodegenError(
                     f"[{e.line}:{e.col}] Array '{e.name}' has no value form; index it or take its address"
                 )
-            self.code.append(Instruction(OpCode.LOAD_LOCAL, slot.index))
+            self.code.append(Instruction(
+                OpCode.LOAD_LOCAL_F if self._is_float(e, ctx) else OpCode.LOAD_LOCAL,
+                slot.index))
         elif isinstance(e, A.AddressOf):
             # A pointer is a local index into the current frame.
             if isinstance(e.target, A.Identifier):
@@ -558,7 +615,8 @@ class CodeGenVM:
         elif isinstance(e, A.Unary):
             self._emit_expr(e.right, layout, ctx)
             if e.op == '-':
-                self.code.append(Instruction(OpCode.NEG))
+                self.code.append(Instruction(
+                    OpCode.FNEG if self._is_float(e, ctx) else OpCode.NEG))
             elif e.op == '!':
                 self.code.append(Instruction(OpCode.NOT))
             elif e.op == '~':
@@ -575,7 +633,9 @@ class CodeGenVM:
         elif isinstance(e, A.FieldAccess):
             fld = self._field_of(e, ctx)
             self._emit_expr(e.obj, layout, ctx)
-            self.code.append(Instruction(OpCode.HEAP_LOAD_FIELD, fld.offset))
+            self.code.append(Instruction(
+                OpCode.HEAP_LOAD_FIELD_F if fld.type == Float else OpCode.HEAP_LOAD_FIELD,
+                fld.offset))
         elif isinstance(e, A.StructLit):
             self._emit_struct_lit(e, layout, ctx)
         elif isinstance(e, A.Call):
@@ -616,7 +676,9 @@ class CodeGenVM:
                 )
             self.code.append(Instruction(OpCode.DUP))
             self._emit_expr(fi.value, layout, ctx)
-            self.code.append(Instruction(OpCode.HEAP_STORE_FIELD, fld.offset))
+            self.code.append(Instruction(
+                OpCode.HEAP_STORE_FIELD_F if fld.type == Float else OpCode.HEAP_STORE_FIELD,
+                fld.offset))
 
     def _emit_binary(self, e: A.Binary, layout: FunctionLayout, ctx: Context):
         if e.op == '&&':
@@ -674,10 +736,28 @@ class CodeGenVM:
         }
         if e.op not in binary_ops:
             raise CodegenError(f"[{e.line}:{e.col}] Unknown binary operator '{e.op}'")
+        float_ops = {
+            '+': OpCode.FADD,
+            '-': OpCode.FSUB,
+            '*': OpCode.FMUL,
+            '/': OpCode.FDIV,
+        }
         self._emit_expr(e.left, layout, ctx)
         self._emit_expr(e.right, layout, ctx)
         if e.op == '+' and ctx.get_type(e.left) == Str:
             self.code.append(Instruction(OpCode.STR_CONCAT))
+            return
+        if e.op in float_ops and ctx.get_type(e.left) == Float:
+            self.code.append(Instruction(float_ops[e.op]))
+            return
+        if e.op in COMPARISONS and ctx.get_type(e.left) == Float:
+            # Same shape as the str comparison below, and for the same reason:
+            # FCMP reduces the pair to -1/0/1 and the integer comparison opcode
+            # tests that against zero, so all six operators come from one new
+            # opcode. The operand stack is untyped, so codegen must decide this.
+            self.code.append(Instruction(OpCode.FCMP))
+            self.code.append(Instruction(OpCode.PUSH_INT, 0))
+            self.code.append(Instruction(binary_ops[e.op]))
             return
         if e.op in COMPARISONS and ctx.get_type(e.left) == Str:
             # Comparing interned ids would order strings by whichever literal
@@ -724,6 +804,20 @@ class CodeGenVM:
             # with an over-long length.
             self.code.append(Instruction(OpCode.BOUNDS_CHECK, slot.length))
             self.code.append(Instruction(OpCode.LOAD_LOCAL_IDX, slot.index))
+            return
+
+        # int <-> float, the only conversions between them.
+        if name == "int_to_float" and len(e.args) == 1:
+            self._emit_expr(e.args[0], layout, ctx)
+            self.code.append(Instruction(OpCode.F_FROM_INT))
+            return
+        if name == "float_to_int" and len(e.args) == 1:
+            self._emit_expr(e.args[0], layout, ctx)
+            self.code.append(Instruction(OpCode.F_TO_INT))
+            return
+        if name == "float_to_str" and len(e.args) == 1:
+            self._emit_expr(e.args[0], layout, ctx)
+            self.code.append(Instruction(OpCode.STR_FROM_FLOAT))
             return
 
         # Pointer/memory intrinsics operating on frame locals.

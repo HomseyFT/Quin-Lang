@@ -83,7 +83,7 @@ class TestConcatenation(QuinTestCase):
 
     def test_plus_still_rejects_mixed_types(self):
         self.assertCompileError('fn main(): int { println("a" + 1); return 0; }',
-                                "Arithmetic operators require int operands")
+                                "Arithmetic operators require int or float operands")
 
 
 class TestLengthAndCharacters(QuinTestCase):

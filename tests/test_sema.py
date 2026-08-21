@@ -200,7 +200,7 @@ class TestTypeRules(QuinTestCase):
     def test_bool_is_not_int(self):
         self.assertCompileError(
             "fn main(): int { println(true + 1); return 0; }",
-            "Arithmetic operators require int operands",
+            "Arithmetic operators require int or float operands",
         )
 
     def test_condition_must_be_bool(self):
@@ -228,7 +228,7 @@ class TestTypeRules(QuinTestCase):
     def test_negation_requires_int(self):
         self.assertCompileError(
             "fn main(): int { let b: bool = true; println(0 - b); return 0; }",
-            "Arithmetic operators require int operands",
+            "Arithmetic operators require int or float operands",
         )
 
     def test_not_requires_bool(self):
@@ -261,13 +261,13 @@ class TestPrinting(QuinTestCase):
     def test_ptr_is_not_printable(self):
         self.assertCompileError(
             "fn main(): int { let x: int; let p: ptr; p = @x; println(p); return 0; }",
-            "print/println expect int, str, or bool",
+            "print/println expect int, float, str, or bool",
         )
 
     def test_array_is_not_printable(self):
         self.assertCompileError(
             "fn main(): int { let a: int[2]; println(a); return 0; }",
-            "print/println expect int, str, or bool",
+            "print/println expect int, float, str, or bool",
         )
 
 

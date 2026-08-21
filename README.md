@@ -8,7 +8,7 @@ It compiles to bytecode for **QuinVM**, a stack machine written in Python. The w
 
 The language is intentionally small:
 
-- `int`, `bool`, `str`, `ptr`, `heapptr`, and fixed-size stack arrays `int[N]`
+- `int`, `float`, `bool`, `str`, `ptr`, `heapptr`, and fixed-size stack arrays `int[N]`
 - `struct` types: heap-allocated objects with reference semantics, including self-referential ones
 - Functions with parameters, recursion, and `int` / `bool` / `str` / pointer / `void` returns
 - `if` / `else`, `while`, `for`, `break` / `continue`, and bare `{ ... }` blocks
@@ -51,7 +51,7 @@ A larger tour of arrays, pointers, printing, and boolean logic:
 python3 -m compiler.driver_vm examples/hello.ql
 ```
 
-Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/stdlib.ql` (a tour of the standard library), `examples/strings.ql` (building and inspecting strings), `examples/vm_arrays_push.ql` (`array_push`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
+Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/stdlib.ql` (a tour of the standard library), `examples/strings.ql` (building and inspecting strings), `examples/vm_arrays_push.ql` (`array_push`), `examples/floats.ql` (floats and `std/float.ql`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
 
 `main`'s return value becomes the process exit code, so a program can be tested from a shell:
 
@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-651 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+712 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -119,6 +119,7 @@ fn main(): int {
 | `std/io.ql` | `newline`, `print_repeat`, `print_spaces`, `print_line`, `hex_digit`, `print_hex` / `println_hex`, `print_binary` / `println_binary`, `print_padded` |
 | `std/list.ql` | `IntList`, a persistent singly linked list: `list_push`, `list_len`, `list_get`, `list_sum`, `list_reverse`, `list_contains`, and friends |
 | `std/vec.ql` | `IntVec`, a growable int array on the heap: `vec_new`, `vec_push`, `vec_get`, `vec_set`, `vec_pop`, `vec_reverse`, and friends |
+| `std/float.ql` | `fabs`, `fmin`, `fmax`, `fsign`, `floor`, `ceil`, `round`, `ftrunc`, `fpow`, `fclose` |
 | `std/prelude.ql` | Includes the three function-only modules above, so one include brings in the common helpers |
 
 The collection modules are not in the prelude, because each declares a struct type and a struct name is global once included. Include those by name when you want them.
@@ -134,6 +135,7 @@ This is a quick tour; [SYNTAX.md](SYNTAX.md) is the reference.
 ### Types
 
 - `int` — 16-bit **signed** integer. Arithmetic wraps (`32767 + 1` is `-32768`), and `/` truncates toward zero.
+- `float` — 32-bit IEEE 754 single precision, about seven significant digits. The only type wider than a word: it occupies two slots wherever it is stored. `int` and `float` never mix implicitly. See [Floats](#floats).
 - `bool` — `true` / `false`. Not interchangeable with `int`: conditions must be `bool`, and `true + 1` is a type error.
 - `str` — a string: a heap object holding its length and its characters. Literals, concatenation, slicing and conversion all produce one, and the collector reclaims them. See [Strings](#strings).
 - `ptr` — an address in the current frame, produced by `&`.
@@ -362,6 +364,67 @@ println(n.value);      // Runtime error: Null pointer dereference reading a fiel
 
 Rules worth knowing: a literal must give every field exactly once, in any order; fields are read and written but a struct has no value form for `print`; relational operators (`<`, `>`, …) do not apply to references; and a struct cannot have array-typed or `void` fields.
 
+### Floats
+
+A `float` is 32-bit IEEE 754 single precision. It is the only type wider than a machine word, so it occupies **two consecutive slots** wherever it is stored — a frame local, a parameter, a struct field.
+
+```quin
+let x: float = 1.5;
+let y: float = 0.25;
+
+println(x + y);        // 1.75
+println(x / y);        // 6.0
+println(x > y);        // true
+println(1.0 / 3.0);    // 0.33333334 -- seven digits, not seventeen
+```
+
+A literal needs digits on both sides of the point: `1.5` and `3.0`, never `1.` or `.5`. There is no exponent notation, and `1e5` is a lex error rather than silently lexing as `1` followed by the identifier `e5`.
+
+**`int` and `float` never mix.** There is no implicit widening, so `int_to_float` and `float_to_int` are the only bridge:
+
+```quin
+let n: int = 7;
+let x: float = 1.5;
+
+println(x + n);                   // Semantic error: Cannot mix int and float
+println(x + int_to_float(n));     // 8.5
+println(float_to_int(3.75));      // 3 -- truncates toward zero, like integer /
+```
+
+A silent widening would make `total / count` mean different things depending on a declaration somewhere else in the file, so the conversion is written where it happens.
+
+Two arithmetic mistakes fault rather than producing a value that spreads quietly:
+
+```
+Runtime error: Float division by zero
+Runtime error: Float overflow: 9.000000360735796e+40 does not fit in a 32-bit float
+```
+
+Integer overflow wraps and is documented as wrapping, but a float that became infinity would make every later comparison lie, and there is no way to express that in a result.
+
+Three places refuse a float because a pointer or an instruction there addresses exactly one slot, and would silently work on half the value:
+
+| | Why |
+| --- | --- |
+| `float[N]` | Array indexing counts one element per slot |
+| `@x` on a float | A `ptr` names one slot; `load16` would read half a value |
+| `vm_asm { load_local x; }` | The `vm_asm` instruction set moves one slot at a time |
+
+Values that only differ in their last digits are what floats are for, so exact equality is usually the wrong test. `std/float.ql` provides `fclose`:
+
+```quin
+include "std/float.ql";
+
+let acc: float = 0.0;
+for (let i = 0; i < 10; i = i + 1) { acc = acc + 0.1; }
+
+println(acc);                        // 1.0000001
+println(acc == 1.0);                 // false
+println(fclose(acc, 1.0, 0.001));    // true
+```
+
+Printing shows the shortest decimal that reads back as the same 32-bit value, always with a point so `3.0` cannot be mistaken for an int. `float_to_str` produces the same text.
+
 ### Strings
 
 A string is a heap object: a header carrying its length, then its characters, one byte each. A `str` value is that object's address, so strings are allocated, moved and reclaimed exactly like structs.
@@ -577,7 +640,7 @@ Codegen never walks scopes. It turns `frame_symbols` into slots and then looks u
 
 ### QuinVM bytecode
 
-`compiler/bytecode.py` defines the `OpCode` enum and `Instruction`; `runtime/vm.py` implements the interpreter. Values are 16-bit words held as ints masked to `0..0xFFFF`, sign-extended by anything that cares.
+`compiler/bytecode.py` defines the `OpCode` enum and `Instruction`; `runtime/vm.py` implements the interpreter. Values are 16-bit words held as ints masked to `0..0xFFFF`, sign-extended by anything that cares. The one exception is a `float`, which is a single operand-stack entry holding its full 32-bit pattern — see the calling convention below.
 
 - Stack and locals: `PUSH_INT`, `LOAD_LOCAL`, `STORE_LOCAL`, `LOAD_LOCAL_IDX`, `STORE_LOCAL_IDX`, `BOUNDS_CHECK`, `POP`, `DUP`, `SWAP`
 - Arithmetic: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`
@@ -586,11 +649,14 @@ Codegen never walks scopes. It turns `frame_symbols` into slots and then looks u
 - Logic and control flow: `NOT`, `JMP`, `JZ`, `JNZ`
 - Calls: `CALL`, `RET`
 - Frame-relative pointers: `LOAD_INDIRECT`, `STORE_INDIRECT`, `MEMCPY_LOCALS`, `MEMSET_LOCALS`
-- Heap: `ALLOC`, `ALLOC_TYPED`, `HEAP_LOAD`, `HEAP_STORE`, `HEAP_LOAD_FIELD`, `HEAP_STORE_FIELD`, `GC`, `PANIC`
-- Strings: `LOAD_STR`, `STR_CMP`, `STR_LEN`, `STR_CHAR_AT`, `STR_CONCAT`, `STR_SLICE`, `STR_FROM_INT`, `STR_FROM_CHAR`
-- I/O: `PRINT_INT`, `PRINT_STR`, `PRINTLN_INT`, `PRINTLN_STR`
+- Heap: `ALLOC`, `ALLOC_TYPED`, `HEAP_LOAD`, `HEAP_STORE`, `HEAP_LOAD_FIELD`, `HEAP_STORE_FIELD`, `HEAP_LOAD_FIELD_F`, `HEAP_STORE_FIELD_F`, `GC`, `PANIC`
+- Strings: `LOAD_STR`, `STR_CMP`, `STR_LEN`, `STR_CHAR_AT`, `STR_CONCAT`, `STR_SLICE`, `STR_FROM_INT`, `STR_FROM_CHAR`, `STR_FROM_FLOAT`
+- Floats: `PUSH_FLOAT`, `LOAD_LOCAL_F`, `STORE_LOCAL_F`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `FNEG`, `FCMP`, `F_FROM_INT`, `F_TO_INT`
+- I/O: `PRINT_INT`, `PRINT_STR`, `PRINTLN_INT`, `PRINTLN_STR`, `PRINT_FLOAT`, `PRINTLN_FLOAT`
 
 Calling convention: arguments are pushed left to right and consumed by `CALL` into the callee's leading locals. **Every** function pushes exactly one return value — void functions and void builtins push a dummy `0` that the caller pops — so `RET` is uniform. Each frame records the operand-stack height at entry, and `RET` verifies the balance, which turns a codegen bug into an immediate `Unbalanced operand stack at RET` instead of silent corruption.
+
+A `float` is where the one-word-per-value rule needed a decision. It is **two slots** in storage but **one entry** on the operand stack, carrying the whole 32-bit pattern. That split is deliberate: it keeps `POP`, `DUP`, `SWAP` and the `RET` balance check counting values rather than words, so none of them had to learn about width. `LOAD_LOCAL_F` and `STORE_LOCAL_F` are the only places the value is split and rejoined, and `FunctionInfo.param_words` tells `CALL` how far to advance for each argument, since a float argument arrives as one entry and fills two slots. The collector is unaffected either way — a float is never a reference, so both halves are simply skipped.
 
 The VM checks local indices, heap word bounds, operand-stack underflow, division and modulo by zero, negative `memcpy` / `memset` counts, null dereferences, and — via `BOUNDS_CHECK` — array indices against the array's own length.
 
@@ -617,6 +683,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_gc.py` | What the collector reclaims, what it must not, and operand-stack tagging |
 | `tests/test_stdlib.py` | Every standard library function, its edge cases, and `panic` |
 | `tests/test_strings.py` | Escapes, string construction, the heap representation, and collection |
+| `tests/test_floats.py` | Float storage width, the calling convention, struct fields, precision, and `std/float.ql` |
 | `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 | `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
@@ -678,7 +745,7 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - Array indexing is bounds-checked at compile time for literal indices and at run time for everything else, `array_push` / `array_pop` included.
 - A `ptr` does not outlive the frame it points into.
 - Collection is triggered only by allocation pressure or an explicit `gc()`. Every collection moves every surviving object that has somewhere lower to go.
-- `int` is the only numeric type: 16-bit, signed, wrapping.
+- `float` is 32-bit single precision, so it carries about seven significant digits. There are no float arrays, no exponent notation in literals, and no `&` on a float.
 - Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
 - The process exit code carries only the low byte of `main`'s return value. Compile and runtime errors use 2 and 3, which a program may also return; stderr is the unambiguous signal.
 
