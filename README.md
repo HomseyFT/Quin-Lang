@@ -70,7 +70,15 @@ byte, so this exits 0. Return a value in 0..255 to say what you mean.
 
 The check constant-folds, so `return 0 - 1`, `return 200 + 100`, and `return 32767 + 1` are all caught, reported as the value they actually produce. A return the compiler cannot evaluate is left alone. Warnings go to stderr, so piping stdout stays clean, and they change neither the exit code nor whether the program runs.
 
-Compile and runtime errors exit 1, which a program returning 1 cannot be distinguished from — check stderr if that matters.
+The tool's own failures use codes of their own, so a caller can tell them apart from the program's result:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0`..`255` | `main`'s return value, low byte |
+| `2` | Compile error — nothing ran (also argparse's code for a bad command line) |
+| `3` | Runtime error — the program faulted |
+
+Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors always print to stderr and a clean run prints nothing there, which is the one signal that never collides.
 
 ### Running the tests
 
@@ -78,7 +86,7 @@ Compile and runtime errors exit 1, which a program returning 1 cannot be disting
 python3 -m unittest discover -s tests -t .
 ```
 
-632 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+651 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -288,7 +296,14 @@ println(v);                       // 20
 
 Both take the array by name — an arbitrary expression that happens to be an array won't work.
 
-Unlike indexing, these two are **not** bounds-checked: the length is yours to keep honest, so a push past the end writes over whatever local sits after the array.
+These are bounds-checked exactly like indexing, since a push touches `arr[len]` and a pop touches `arr[len - 1]`. A literal length is a compile error:
+
+```
+Semantic error: [3:28] array_push at length 3 accesses index 3, out of bounds for length 3
+Semantic error: [3:27] array_pop at length 0 accesses index -1, out of bounds for length 3
+```
+
+and a computed one faults at run time. The length is still yours to maintain — the check stops a mistake from reaching a neighboring local, it does not track the length for you.
 
 ### Structs
 
@@ -522,7 +537,16 @@ vm_asm {
 println(x);   // 6
 ```
 
-Names inside the block resolve against the scope at that point, including shadowed bindings. The block's stack effect is not checked, so an unbalanced block surfaces as `Unbalanced operand stack at RET` when the enclosing function returns. The supported instruction set is listed in [SYNTAX.md](SYNTAX.md#vm_asm-instruction-set).
+Names inside the block resolve against the scope at that point, including shadowed bindings. The supported instruction set is listed in [SYNTAX.md](SYNTAX.md#vm_asm-instruction-set).
+
+A block is straight-line — the instruction set has no jumps — so its stack effect is the sum of its instructions and is checked at compile time. A block must end at the depth it started, and may never pop below it:
+
+```
+Codegen error: [2:5] vm_asm block leaves 1 value(s) on the operand stack; it must end balanced
+Codegen error: [1:30] vm_asm 'add' needs 2 value(s) on the operand stack but the block has 1
+```
+
+Both halves of each instruction's effect matter, not just the net: `add` nets −1 but needs two operands, so a block holding one value would otherwise reach past its own start into the enclosing frame.
 
 ---
 
@@ -651,13 +675,12 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 
 ## Limitations and gotchas
 
-- Array indexing is bounds-checked at compile time for literal indices and at run time for everything else; `array_push` / `array_pop` are **not** bounds-checked, so an in-frame overrun silently hits a neighboring local.
+- Array indexing is bounds-checked at compile time for literal indices and at run time for everything else, `array_push` / `array_pop` included.
 - A `ptr` does not outlive the frame it points into.
 - Collection is triggered only by allocation pressure or an explicit `gc()`. Every collection moves every surviving object that has somewhere lower to go.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
 - Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
-- The process exit code carries only the low byte of `main`'s return value, and 1 collides with the error exit code.
-- `vm_asm` blocks are not checked for stack balance until run time.
+- The process exit code carries only the low byte of `main`'s return value. Compile and runtime errors use 2 and 3, which a program may also return; stderr is the unambiguous signal.
 
 Future directions: a debugger (the source mapping it needs is still the cheap thing to front-load), liveness analysis so a variable dead but still in scope stops rooting its object, and filling out `std/`.
 

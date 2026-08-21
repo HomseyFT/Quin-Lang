@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from compiler.driver_vm import process_exit_code
+from compiler.driver_vm import EXIT_COMPILE_ERROR, EXIT_RUNTIME_ERROR, process_exit_code
 from tests.harness import REPO_ROOT, QuinTestCase, warnings_for
 
 
@@ -179,31 +179,45 @@ class TestExitCodeWarning(QuinTestCase):
 
 
 class TestErrorExits(unittest.TestCase):
-    """Errors keep exiting 1, on stderr."""
+    """Errors exit with a code of their own, on stderr."""
 
     def test_compile_error(self):
         result = run_driver("fn main(): int { let x: int = true; return 0; }")
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, EXIT_COMPILE_ERROR)
         self.assertIn("Semantic error", result.stderr)
 
     def test_syntax_error(self):
         result = run_driver("fn main(): int { return 0 }")
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, EXIT_COMPILE_ERROR)
         self.assertIn("Import error", result.stderr)
 
     def test_runtime_error(self):
         result = run_driver("fn main(): int { let z: int; println(1 / z); return 0; }")
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, EXIT_RUNTIME_ERROR)
         self.assertIn("Runtime error", result.stderr)
 
-    def test_a_program_returning_one_is_indistinguishable_from_an_error(self):
-        # Both exit 1. Nothing to fix -- the same is true of any C program --
-        # but a script that treats 1 as "the tool failed" needs to know.
+    def test_compile_and_runtime_failures_are_distinguishable(self):
+        # The point of moving off 1: a caller can tell "it never ran" from
+        # "it ran and faulted" without parsing stderr.
+        compile_fail = run_driver("fn main(): int { let x: int = true; return 0; }")
+        runtime_fail = run_driver("fn main(): int { let z: int; println(1 / z); return 0; }")
+        self.assertNotEqual(compile_fail.returncode, runtime_fail.returncode)
+
+    def test_a_program_returning_one_is_no_longer_an_error_code(self):
+        # This used to be indistinguishable from a failure. Nothing reserves 2
+        # or 3 from a program either, so stderr is still the certain signal --
+        # but 1 is the value a script is most likely to return on purpose.
         ok = run_driver("fn main(): int { return 1; }")
-        bad = run_driver("fn main(): int { let z: int; println(1 / z); return 0; }")
-        self.assertEqual(ok.returncode, bad.returncode)
+        self.assertEqual(ok.returncode, 1)
         self.assertEqual(ok.stderr, "")
-        self.assertNotEqual(bad.stderr, "")
+        self.assertNotIn(ok.returncode, (EXIT_COMPILE_ERROR, EXIT_RUNTIME_ERROR))
+
+    def test_a_program_may_still_return_an_error_code_itself(self):
+        # Documented collision: exit status alone cannot carry both, so a 3
+        # from a clean program looks like a runtime error to the shell.
+        result = run_driver("fn main(): int { return 3; }")
+        self.assertEqual(result.returncode, EXIT_RUNTIME_ERROR)
+        self.assertEqual(result.stderr, "", "but stderr tells them apart")
 
 
 if __name__ == "__main__":

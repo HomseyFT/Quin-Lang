@@ -433,8 +433,99 @@ class TestArrayHelpers(QuinTestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestArrayHelperBounds(QuinTestCase):
+    """array_push/array_pop used to write past the end of the array and land in
+    a neighbouring local, silently. They are checked the same way `a[i]` is: a
+    literal length is a compile error, a computed one faults at run time.
+    """
+
+    def test_push_onto_a_full_array_is_a_compile_error(self):
+        self.assertCompileError(
+            "fn main(): int { let a: int[3]; let n: int; n = array_push(a, 3, 9); return 0; }",
+            "array_push at length 3 accesses index 3, out of bounds for length 3",
+        )
+
+    def test_a_negative_length_faults_at_run_time(self):
+        # There is no negative int literal -- `0 - 1` is a binary expression --
+        # so this is never a constant to the compile-time check.
+        self.assertRuntimeError(
+            "fn main(): int { let a: int[3]; let n: int; n = array_push(a, 0 - 1, 9); return 0; }",
+            "Array index out of bounds",
+        )
+
+    def test_pop_from_an_empty_array_is_a_compile_error(self):
+        self.assertCompileError(
+            "fn main(): int { let a: int[3]; let v: int; v = array_pop(a, 0); return 0; }",
+            "array_pop at length 0 accesses index -1, out of bounds for length 3",
+        )
+
+    def test_push_at_the_last_slot_is_fine(self):
+        # The boundary the check must not move: index length-1 is in range.
+        self.assertPrints(
+            """
+            fn main(): int {
+                let a: int[3];
+                println(array_push(a, 2, 9));
+                println(a[2]);
+                return 0;
+            }
+            """,
+            "3", "9",
+        )
+
+    def test_pop_at_a_full_length_is_fine(self):
+        self.assertPrints(
+            "fn main(): int { let a: int[3]; array_push(a, 2, 7); println(array_pop(a, 3)); return 0; }",
+            "7",
+        )
+
+    def test_a_computed_overrun_faults_at_run_time(self):
+        self.assertRuntimeError(
+            """
+            fn main(): int {
+                let a: int[3];
+                let n: int;
+                let i: int;
+                while (i < 5) {
+                    n = array_push(a, n, i);
+                    i = i + 1;
+                }
+                return 0;
+            }
+            """,
+            "Array index out of bounds",
+        )
+
+    def test_a_computed_pop_from_empty_faults_at_run_time(self):
+        self.assertRuntimeError(
+            """
+            fn main(): int {
+                let a: int[3];
+                let n: int;
+                println(array_pop(a, n));
+                return 0;
+            }
+            """,
+            "Array index out of bounds",
+        )
+
+    def test_an_overrun_no_longer_reaches_a_neighbouring_local(self):
+        # The concrete symptom of the old bug: `guard` sits after `a` in the
+        # frame, so pushing at index 3 used to overwrite it.
+        self.assertRuntimeError(
+            """
+            fn main(): int {
+                let a: int[3];
+                let guard: int = 111;
+                let n: int = 3;
+                n = array_push(a, n, 999);
+                println(guard);
+                return 0;
+            }
+            """,
+            "Array index out of bounds",
+        )
+
 
 
 class TestHeapPointerArithmetic(QuinTestCase):
@@ -568,3 +659,6 @@ class TestNull(QuinTestCase):
             "Cannot assign null to int",
         )
 
+
+if __name__ == "__main__":
+    unittest.main()

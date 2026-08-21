@@ -408,30 +408,42 @@ class CodeGenVM:
         The body is raw text, so sema cannot resolve its names while walking
         expressions. It records the scope in effect at this block instead, and
         NAME is looked up there.
+
+        A block is straight-line -- there are no jumps in the instruction set --
+        so its effect on the operand stack is exactly the sum of its parts, and
+        both underflow and leftover residue are decided here rather than
+        surfacing as 'Unbalanced operand stack at RET' at run time. Each table
+        below therefore carries the opcode's stack effect next to the opcode,
+        so the two cannot drift apart.
         """
         visible = ctx.asm_scope.get(id(vm_asm))
         if visible is None:
             raise CodegenError(
                 f"[{vm_asm.line}:{vm_asm.col}] No scope recorded for this vm_asm block"
             )
+        # name -> (opcode, operands popped, results pushed). Both halves
+        # matter: `add` nets -1 but needs two operands present, so tracking
+        # only the net effect would let a block with one value on the stack
+        # reach past its own start.
         simple_ops = {
-            "add": OpCode.ADD,
-            "sub": OpCode.SUB,
-            "mul": OpCode.MUL,
-            "div": OpCode.DIV,
-            "neg": OpCode.NEG,
-            "not": OpCode.NOT,
-            "cmp_eq": OpCode.CMP_EQ,
-            "cmp_ne": OpCode.CMP_NE,
-            "cmp_lt": OpCode.CMP_LT,
-            "cmp_le": OpCode.CMP_LE,
-            "cmp_gt": OpCode.CMP_GT,
-            "cmp_ge": OpCode.CMP_GE,
+            "add": (OpCode.ADD, 2, 1),
+            "sub": (OpCode.SUB, 2, 1),
+            "mul": (OpCode.MUL, 2, 1),
+            "div": (OpCode.DIV, 2, 1),
+            "neg": (OpCode.NEG, 1, 1),
+            "not": (OpCode.NOT, 1, 1),
+            "cmp_eq": (OpCode.CMP_EQ, 2, 1),
+            "cmp_ne": (OpCode.CMP_NE, 2, 1),
+            "cmp_lt": (OpCode.CMP_LT, 2, 1),
+            "cmp_le": (OpCode.CMP_LE, 2, 1),
+            "cmp_gt": (OpCode.CMP_GT, 2, 1),
+            "cmp_ge": (OpCode.CMP_GE, 2, 1),
         }
         local_ops = {
-            "load_local": OpCode.LOAD_LOCAL,
-            "store_local": OpCode.STORE_LOCAL,
+            "load_local": (OpCode.LOAD_LOCAL, 0, 1),
+            "store_local": (OpCode.STORE_LOCAL, 1, 0),
         }
+        depth = 0
 
         for raw in vm_asm.code.splitlines():
             line = raw.strip()
@@ -450,6 +462,7 @@ class CodeGenVM:
                         f"[{vm_asm.line}:{vm_asm.col}] vm_asm push_int expects an integer literal, got '{args[0]}'"
                     )
                 self.code.append(Instruction(OpCode.PUSH_INT, value & 0xFFFF))
+                pops, pushes = 0, 1
             elif op in local_ops and len(args) == 1:
                 name = args[0]
                 sym = visible.get(name)
@@ -462,13 +475,30 @@ class CodeGenVM:
                     raise CodegenError(
                         f"[{vm_asm.line}:{vm_asm.col}] vm_asm {op}: '{name}' is an array; index it explicitly"
                     )
-                self.code.append(Instruction(local_ops[op], slot.index))
+                opcode, pops, pushes = local_ops[op]
+                self.code.append(Instruction(opcode, slot.index))
             elif op in simple_ops and not args:
-                self.code.append(Instruction(simple_ops[op]))
+                opcode, pops, pushes = simple_ops[op]
+                self.code.append(Instruction(opcode))
             else:
                 raise CodegenError(
                     f"[{vm_asm.line}:{vm_asm.col}] Unknown or malformed vm_asm instruction: '{raw.strip()}'"
                 )
+
+            # Consuming more than the block itself pushed would reach into
+            # whatever the enclosing frame left on the stack.
+            if pops > depth:
+                raise CodegenError(
+                    f"[{vm_asm.line}:{vm_asm.col}] vm_asm '{line}' needs {pops} "
+                    f"value(s) on the operand stack but the block has {depth}"
+                )
+            depth += pushes - pops
+
+        if depth != 0:
+            raise CodegenError(
+                f"[{vm_asm.line}:{vm_asm.col}] vm_asm block leaves {depth} "
+                f"value(s) on the operand stack; it must end balanced"
+            )
 
     def _emit_bool_to_str(self) -> None:
         """Replace a 0/1 on top of the stack with the string id for 'false'/'true'."""
@@ -675,6 +705,9 @@ class CodeGenVM:
             self.code.append(Instruction(OpCode.DUP))   # [len, len]
             self._emit_expr(val_expr, layout, ctx)      # [len, len, value]
             self.code.append(Instruction(OpCode.SWAP))  # [len, value, len]
+            # BOUNDS_CHECK reads the index without popping it, so it drops in
+            # ahead of the store the same way it does for `xs[i] = v`.
+            self.code.append(Instruction(OpCode.BOUNDS_CHECK, slot.length))
             self.code.append(Instruction(OpCode.STORE_LOCAL_IDX, slot.index))  # [len]
             self.code.append(Instruction(OpCode.PUSH_INT, 1))
             self.code.append(Instruction(OpCode.ADD))   # [len + 1]
@@ -687,6 +720,9 @@ class CodeGenVM:
             self._emit_expr(len_expr, layout, ctx)
             self.code.append(Instruction(OpCode.PUSH_INT, 1))
             self.code.append(Instruction(OpCode.SUB))   # len - 1
+            # Popping an empty array reaches index -1, which this rejects along
+            # with an over-long length.
+            self.code.append(Instruction(OpCode.BOUNDS_CHECK, slot.length))
             self.code.append(Instruction(OpCode.LOAD_LOCAL_IDX, slot.index))
             return
 

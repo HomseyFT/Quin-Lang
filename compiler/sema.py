@@ -502,6 +502,35 @@ class SemanticAnalyzer:
             return False
         return False
 
+    @staticmethod
+    def _const_int(e: A.Expr):
+        """The value of `e` if it is an int literal, else None.
+
+        `bool` is excluded because it is an int subclass in Python and would
+        otherwise let `true` pass as the index 1.
+        """
+        if isinstance(e, A.Literal) and isinstance(e.value, int) and not isinstance(e.value, bool):
+            return e.value
+        return None
+
+    def _check_const_length(self, arr_t: Type, len_expr: A.Expr, what: str,
+                            offset: int, line: int, col: int):
+        """Reject an array_push/array_pop whose length is a literal that puts
+        the access outside the array. `offset` is what the builtin adds to the
+        length to reach the element it touches: 0 for push, -1 for pop.
+        """
+        len_val = self._const_int(len_expr)
+        length = array_length(arr_t)
+        if len_val is None or length is None:
+            return
+        idx = len_val + offset
+        if idx < 0 or idx >= length:
+            raise SemanticError(
+                f"{what} at length {len_val} accesses index {idx}, "
+                f"out of bounds for length {length}",
+                line, col,
+            )
+
     def _validate_index(self, arr_t: Type, idx_expr: A.Expr, scope: Scope, not_array_msg: str, line: int, col: int):
         """Shared by reads, assignment targets and address-of, so a literal
         index out of range is caught the same way in all three."""
@@ -510,15 +539,14 @@ class SemanticAnalyzer:
         idx_t = self._analyze_expr(idx_expr, scope)
         if idx_t != Int:
             raise SemanticError("Array index must be int", line, col)
-        if isinstance(idx_expr, A.Literal) and isinstance(idx_expr.value, int) and not isinstance(idx_expr.value, bool):
+        idx_val = self._const_int(idx_expr)
+        if idx_val is not None:
             length = array_length(arr_t)
-            if length is not None:
-                idx_val = idx_expr.value
-                if idx_val < 0 or idx_val >= length:
-                    raise SemanticError(
-                        f"Array index {idx_val} out of bounds for length {length}",
-                        line, col,
-                    )
+            if length is not None and (idx_val < 0 or idx_val >= length):
+                raise SemanticError(
+                    f"Array index {idx_val} out of bounds for length {length}",
+                    line, col,
+                )
 
     def _analyze_expr(self, e: A.Expr, scope: Scope) -> Type:
         if isinstance(e, A.Literal):
@@ -725,6 +753,10 @@ class SemanticAnalyzer:
                 val_t = self._analyze_expr(e.args[2], scope)
                 if val_t != Int:
                     raise SemanticError("array_push value must be int", e.line, e.col)
+                # A push writes at index `len`, so a literal length is the same
+                # thing as a literal index and gets caught here rather than at
+                # run time. Anything computed is checked by BOUNDS_CHECK.
+                self._check_const_length(arr_t, e.args[1], "array_push", 0, e.line, e.col)
                 self.ctx.set_type(e, Int)
                 return Int
             if e.callee == "array_pop":
@@ -736,6 +768,9 @@ class SemanticAnalyzer:
                 len_t = self._analyze_expr(e.args[1], scope)
                 if len_t != Int:
                     raise SemanticError("array_pop length must be int", e.line, e.col)
+                # A pop reads at index `len - 1`, so popping an empty array is
+                # index -1 and is rejected the same way as an overrun.
+                self._check_const_length(arr_t, e.args[1], "array_pop", -1, e.line, e.col)
                 self.ctx.set_type(e, Int)
                 return Int
             if e.callee not in self.ctx.functions:

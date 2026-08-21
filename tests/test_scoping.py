@@ -271,10 +271,114 @@ class TestVmAsmScope(QuinTestCase):
             "push_int expects an integer literal",
         )
 
-    def test_unbalanced_block_is_caught_at_return(self):
-        self.assertRuntimeError(
+
+class TestVmAsmStackBalance(QuinTestCase):
+    """A vm_asm block has no jumps, so its stack effect is the sum of its
+    instructions and is decided at compile time. This used to survive codegen
+    and surface as 'Unbalanced operand stack at RET', pointing at the function
+    rather than at the block that caused it.
+    """
+
+    def test_a_leftover_value_is_a_compile_error(self):
+        self.assertCompileError(
             "fn main(): int { vm_asm { push_int 1; } return 0; }",
-            "Unbalanced operand stack at RET",
+            "leaves 1 value(s) on the operand stack",
+        )
+
+    def test_the_error_points_at_the_block(self):
+        self.assertCompileError(
+            "fn main(): int {\n    vm_asm { push_int 1; }\n    return 0;\n}",
+            "[2:5]",
+        )
+
+    def test_a_binary_op_short_one_operand_is_a_compile_error(self):
+        # `add` nets -1, so a net-effect check would accept this. It needs two
+        # operands and only one is there, so the second would come from the
+        # enclosing frame.
+        self.assertCompileError(
+            "fn main(): int { let x: int; vm_asm { push_int 1; add; } return 0; }",
+            "'add' needs 2 value(s) on the operand stack but the block has 1",
+        )
+
+    def test_a_bare_store_is_a_compile_error(self):
+        self.assertCompileError(
+            "fn main(): int { let x: int; vm_asm { store_local x; } return 0; }",
+            "needs 1 value(s) on the operand stack but the block has 0",
+        )
+
+    def test_a_unary_op_on_an_empty_stack_is_a_compile_error(self):
+        self.assertCompileError(
+            "fn main(): int { vm_asm { neg; } return 0; }",
+            "'neg' needs 1 value(s) on the operand stack but the block has 0",
+        )
+
+    def test_a_balanced_block_still_compiles_and_runs(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let x: int = 5;
+                vm_asm {
+                    load_local x;
+                    push_int 1;
+                    add;
+                    store_local x;
+                }
+                println(x);
+                return 0;
+            }
+            """,
+            "6",
+        )
+
+    def test_unary_ops_do_not_change_the_depth(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let x: int = 5;
+                vm_asm { load_local x; neg; store_local x; }
+                println(x);
+                return 0;
+            }
+            """,
+            "-5",
+        )
+
+    def test_a_comparison_consumes_two_and_pushes_one(self):
+        self.assertPrints(
+            """
+            fn main(): int {
+                let x: int = 3;
+                vm_asm { load_local x; push_int 3; cmp_eq; store_local x; }
+                println(x);
+                return 0;
+            }
+            """,
+            "1",
+        )
+
+    def test_an_empty_block_is_balanced(self):
+        self.assertCompiles("fn main(): int { vm_asm { } return 0; }")
+
+    def test_depth_may_rise_and_fall_within_the_block(self):
+        # Balance is about the ends, not about every intermediate step.
+        self.assertPrints(
+            """
+            fn main(): int {
+                let x: int = 1;
+                let y: int = 2;
+                vm_asm {
+                    load_local x;
+                    load_local y;
+                    load_local x;
+                    add;
+                    add;
+                    store_local x;
+                }
+                println(x);
+                return 0;
+            }
+            """,
+            "4",
         )
 
 

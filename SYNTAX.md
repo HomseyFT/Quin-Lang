@@ -71,7 +71,7 @@ fn main(): void { }
 
 The compiler warns when `main` returns a constant outside `0..255`, naming the exit code it will really produce, so that `return 256` is not mistaken for success. Constant arithmetic is folded, so `return 0 - 1` is caught too; a value the compiler cannot evaluate passes without comment.
 
-Compile and runtime errors also exit 1, so a program returning 1 is indistinguishable from a failure unless you check stderr.
+A compile error exits `2` and a runtime error exits `3`, so the tool's own failures are distinct from a program returning `1`. Nothing reserves those values from a program, though — stderr is the only certain signal, and a clean run leaves it empty.
 
 ## Types
 
@@ -259,7 +259,14 @@ fn main(): int {
 
 `vm_asm { ... }` lowers directly to VM bytecode. Each instruction is a line ending in `;`.
 
-The block is emitted verbatim with no verification that it leaves the operand stack balanced. If it doesn't, the VM reports `Unbalanced operand stack at RET` when the enclosing function returns.
+The block must leave the operand stack at the depth it started, and may never pop below it. There are no jumps in the instruction set, so the effect is the sum of the instructions and both conditions are checked at compile time:
+
+```
+Codegen error: [2:5] vm_asm block leaves 1 value(s) on the operand stack; it must end balanced
+Codegen error: [1:30] vm_asm 'add' needs 2 value(s) on the operand stack but the block has 1
+```
+
+Depth may rise and fall freely in between; only the ends and the floor are constrained.
 
 #### `vm_asm` instruction set
 
@@ -495,7 +502,7 @@ v = array_pop(xs, len);          // v = 20
 len = len - 1;                   // you must decrement it yourself
 ```
 
-Neither checks bounds, and both require `xs` to be a named local array. Pushing at `len >= N` writes past the array.
+Both require `xs` to be a named local array, and both are bounds-checked against the element they touch: `xs[len]` for a push, `xs[len - 1]` for a pop. A literal length is a compile error, a computed one faults at run time, and popping at length 0 is caught as index `-1`. You still maintain `len` yourself — the check only stops a mistake from reaching a neighboring local.
 
 ### `load16` / `store16`
 
@@ -626,7 +633,7 @@ println(ct_select(0, a, b));   // 20
 
 ## Notes and limitations
 
-- Array indexing is bounds-checked: a literal index outside the array is a compile error, and a computed one faults at run time. `array_push` / `array_pop` are **not** checked, so pushing past the end quietly writes over a neighboring local.
+- Array indexing is bounds-checked: a literal index outside the array is a compile error, and a computed one faults at run time. `array_push` and `array_pop` are checked the same way, against the index they touch — `len` for a push, `len - 1` for a pop.
 - Pointers are untyped within their address space: a `ptr` is just a slot index, and nothing checks what kind of data lives there.
 - Pointers do not outlive the frame they point into.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
