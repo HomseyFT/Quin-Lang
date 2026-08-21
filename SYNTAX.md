@@ -416,8 +416,8 @@ println(a[2]);
 
 - The index must be `int`; elements are always `int`.
 - The base must be a named local array.
-- A constant index outside the array is rejected at compile time by sema.
-- A computed index is checked at run time against the array's own length by the `BOUNDS_CHECK` opcode, raising `Array index out of bounds`.
+- A **literal** index outside the array is rejected at compile time by sema — the same check whether you read `a[7]`, assign `a[7] = x`, or take `@a[7]`.
+- Any other index is checked at run time against the array's own length by the `BOUNDS_CHECK` opcode, raising `Array index out of bounds`. The compile-time check does not fold constants, so `a[0 - 1]` is a run-time fault rather than a compile error; there are no negative literals, so a negative index is always caught this way.
 
 ### Pointers and address-of
 
@@ -626,7 +626,7 @@ println(ct_select(0, a, b));   // 20
 
 ## Notes and limitations
 
-- No bounds checking on array indexing or `array_push` / `array_pop`.
+- Array indexing is bounds-checked: a literal index outside the array is a compile error, and a computed one faults at run time. `array_push` / `array_pop` are **not** checked, so pushing past the end quietly writes over a neighboring local.
 - Pointers are untyped within their address space: a `ptr` is just a slot index, and nothing checks what kind of data lives there.
 - Pointers do not outlive the frame they point into.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
@@ -634,4 +634,3 @@ println(ct_select(0, a, b));   // 20
 - No methods, no arrays of structs, and no array-typed struct fields.
 - The collector compacts, so there is no fragmentation: every free byte is usable no matter how scattered the garbage was. Objects move, but a `heapptr` is rewritten to follow its object, so it stays valid.
 - Leaving a scope releases the references it declared, so a loop body or block stops rooting its objects as soon as it ends. A variable in the function's own top-level scope is still rooted until the function returns, even after its last use.
-- No escape sequences in string literals.

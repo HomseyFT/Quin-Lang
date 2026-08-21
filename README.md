@@ -76,7 +76,7 @@ Compile and runtime errors exit 1, which a program returning 1 cannot be disting
 python3 -m unittest discover -s tests -t .
 ```
 
-623 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about a tenth of a second, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+627 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -255,7 +255,19 @@ fn main(): int {
 }
 ```
 
-There is **no bounds checking**. An index that runs past the end of the array quietly reads or writes a neighboring local; the VM only faults when the index leaves the frame entirely.
+Indexing is **bounds-checked against the array itself**, not merely against the frame. A literal index outside the array is a compile error:
+
+```
+Semantic error: [3:6] Array index 7 out of bounds for length 3
+```
+
+and anything else is checked at run time by the `BOUNDS_CHECK` opcode:
+
+```
+Runtime error: Array index out of bounds at pc=12: index=5, length=3
+```
+
+Both apply equally to a read, an assignment target, and `@a[i]`. An overrun therefore faults instead of quietly reading or writing a neighboring local.
 
 `array_push` / `array_pop` pair an array with an explicit length you maintain yourself:
 
@@ -273,6 +285,8 @@ println(v);                       // 20
 ```
 
 Both take the array by name — an arbitrary expression that happens to be an array won't work.
+
+Unlike indexing, these two are **not** bounds-checked: the length is yours to keep honest, so a push past the end writes over whatever local sits after the array.
 
 ### Structs
 
@@ -514,7 +528,7 @@ Names inside the block resolve against the scope at that point, including shadow
 
 1. **Lexing** (`compiler/lexer.py`, `tokens.py`) — source text to tokens, with `//` comments, decimal and `0x` hex literals, and 16-bit range checks.
 2. **Parsing** (`compiler/parser.py`, `ast.py`) — recursive descent into an AST. Every node carries `line` / `col`.
-3. **Include resolution** (`compiler/resolver.py`) — recursively parses included files, detects cycles, and merges everything into one `Program`.
+3. **Include resolution** (`compiler/resolver.py`) — recursively parses included files and merges everything into one `Program`. Each file is resolved once, keyed by absolute path, so including the same file twice is harmless and a cycle simply terminates rather than being reported as an error.
 4. **Semantic analysis** (`compiler/sema.py`) — struct layouts, scopes, name resolution, the entry-point contract, the array restrictions, return checking, and a type for every expression node.
 5. **Code generation** (`compiler/codegen_vm.py`) — the typed AST to bytecode.
 6. **Execution** (`runtime/vm.py`) — the interpreter runs the bytecode and collects the heap.
@@ -539,8 +553,9 @@ Codegen never walks scopes. It turns `frame_symbols` into slots and then looks u
 
 `compiler/bytecode.py` defines the `OpCode` enum and `Instruction`; `runtime/vm.py` implements the interpreter. Values are 16-bit words held as ints masked to `0..0xFFFF`, sign-extended by anything that cares.
 
-- Stack and locals: `PUSH_INT`, `LOAD_LOCAL`, `STORE_LOCAL`, `LOAD_LOCAL_IDX`, `STORE_LOCAL_IDX`, `POP`, `DUP`, `SWAP`
+- Stack and locals: `PUSH_INT`, `LOAD_LOCAL`, `STORE_LOCAL`, `LOAD_LOCAL_IDX`, `STORE_LOCAL_IDX`, `BOUNDS_CHECK`, `POP`, `DUP`, `SWAP`
 - Arithmetic: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`
+- Bitwise: `AND`, `OR`, `XOR`, `SHL`, `SHR`, `BITNOT`
 - Comparisons: `CMP_EQ`, `CMP_NE`, `CMP_LT`, `CMP_LE`, `CMP_GT`, `CMP_GE`
 - Logic and control flow: `NOT`, `JMP`, `JZ`, `JNZ`
 - Calls: `CALL`, `RET`
@@ -551,7 +566,7 @@ Codegen never walks scopes. It turns `frame_symbols` into slots and then looks u
 
 Calling convention: arguments are pushed left to right and consumed by `CALL` into the callee's leading locals. **Every** function pushes exactly one return value — void functions and void builtins push a dummy `0` that the caller pops — so `RET` is uniform. Each frame records the operand-stack height at entry, and `RET` verifies the balance, which turns a codegen bug into an immediate `Unbalanced operand stack at RET` instead of silent corruption.
 
-The VM checks local indices, heap word bounds, operand-stack underflow, division and modulo by zero, and negative `memcpy` / `memset` counts. It does not check array bounds.
+The VM checks local indices, heap word bounds, operand-stack underflow, division and modulo by zero, negative `memcpy` / `memset` counts, null dereferences, and — via `BOUNDS_CHECK` — array indices against the array's own length.
 
 ---
 
@@ -617,7 +632,7 @@ python3 -m tests.update_golden
 
 ## Limitations and gotchas
 
-- Array indexing is bounds-checked at compile time for constant indices and at run time for computed indices; `array_push` / `array_pop` are **not** bounds-checked, so an in-frame overrun silently hits a neighboring local.
+- Array indexing is bounds-checked at compile time for literal indices and at run time for everything else; `array_push` / `array_pop` are **not** bounds-checked, so an in-frame overrun silently hits a neighboring local.
 - A `ptr` does not outlive the frame it points into.
 - Collection is triggered only by allocation pressure or an explicit `gc()`. Every collection moves every surviving object that has somewhere lower to go.
 - `int` is the only numeric type: 16-bit, signed, wrapping.
