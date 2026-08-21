@@ -130,6 +130,24 @@ class TestSyntaxErrors(QuinTestCase):
             "fn main(): int { vm_asm { push_int 1;", "Expected '}' after vm_asm block"
         )
 
+    def test_vm_asm_instruction_without_a_semicolon_is_rejected(self):
+        # It used to be dropped: the pending tokens were never flushed at '}',
+        # so the block compiled to nothing and the program ran as if the
+        # instruction had not been written.
+        self.assertCompileError(
+            "fn main(): int { vm_asm { push_int 5 } return 0; }",
+            "Expected ';' after vm_asm instruction 'push_int 5'",
+        )
+
+    def test_vm_asm_semicolon_is_required_on_the_last_instruction_too(self):
+        self.assertCompileError(
+            "fn main(): int { let x: int = 5; vm_asm { load_local x; push_int 1; add } return 0; }",
+            "Expected ';' after vm_asm instruction 'add'",
+        )
+
+    def test_empty_vm_asm_block_is_allowed(self):
+        self.assertPrints("fn main(): int { vm_asm { } println(1); return 0; }", "1")
+
     def test_missing_function_name(self):
         self.assertCompileError("fn (): int { return 0; }", "Expected function name")
 

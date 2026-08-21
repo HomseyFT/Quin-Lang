@@ -357,6 +357,15 @@ class TestArrayBounds(QuinTestCase):
             "Array index out of bounds",
         )
 
+    def test_constant_overrun_in_an_assignment_is_a_compile_error(self):
+        # The assignment target used to hand-roll its checks and skip the
+        # constant bounds test, so this was caught only at run time while the
+        # matching read was rejected by sema.
+        self.assertCompileError(
+            "fn main(): int { let a: int[2]; a[2] = 9999; return 0; }",
+            "out of bounds for length 2",
+        )
+
     def test_leaving_the_frame_is_a_compile_error(self):
         self.assertCompileError(
             "fn main(): int { let a: int[2]; println(a[50]); return 0; }",
