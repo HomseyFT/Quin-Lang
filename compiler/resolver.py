@@ -91,6 +91,7 @@ class ImportResolver:
                     f"(previously defined in {orig})"
                 )
             self.function_origins[fn.name] = file_path
+            fn.source_file = str(file_path)
             self.all_functions.append(fn)
 
     def _resolve_path(self, include_path: str, relative_to: Path) -> Path:

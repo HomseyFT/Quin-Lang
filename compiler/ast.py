@@ -140,6 +140,9 @@ class Function(Node):
     params: List[Param]
     return_type: Optional[str]
     body: List[Stmt]
+    # Which file declared it, stamped by the resolver when it merges includes.
+    # A line number alone is ambiguous once a program spans files.
+    source_file: str = field(default="", kw_only=True)
 
 @dataclass
 class FieldDef(Node):

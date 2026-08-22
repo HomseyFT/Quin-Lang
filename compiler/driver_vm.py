@@ -39,7 +39,7 @@ def main():
 
         ctx = SemanticAnalyzer().analyze(ast)
         codegen = CodeGenVM()
-        code, functions, strings, structs = codegen.generate(ast, ctx)
+        program = codegen.generate(ast, ctx)
     except ResolveError as e:
         print(f"Import error: {e}", file=sys.stderr)
         sys.exit(EXIT_COMPILE_ERROR)
@@ -55,7 +55,8 @@ def main():
     for warning in ctx.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
-    vm = QuinVM(code, functions, strings, structs)
+    vm = QuinVM(program.code, program.functions, program.strings,
+                program.structs, program.source_map)
     try:
         exit_value = vm.run_main()
     except VMError as e:

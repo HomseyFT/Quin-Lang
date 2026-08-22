@@ -1,10 +1,11 @@
 from __future__ import annotations
 import bisect
 import math
+import os
 import struct
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple
-from compiler.bytecode import OpCode, Instruction, Bytecode
+from compiler.bytecode import OpCode, Instruction, Bytecode, SourceMap
 
 WORD_MASK = 0xFFFF
 SIGN_BIT = 0x8000
@@ -42,7 +43,18 @@ MIN_PAYLOAD = 2
 
 
 class VMError(RuntimeError):
-    """Raised when the VM detects an invalid operand, address, or stack state."""
+    """Raised when the VM detects an invalid operand, address, or stack state.
+
+    A fault caught at the top of the interpreter loop is re-raised carrying
+    where it happened; `location` and `frames` hold that in structured form so
+    a debugger does not have to parse the message back apart.
+    """
+
+    def __init__(self, message: str, location: str = "", frames=()):
+        super().__init__(message)
+        self.message = message
+        self.location = location
+        self.frames = tuple(frames)
 
 
 @dataclass
@@ -51,6 +63,22 @@ class StructLayout:
     name: str
     word_size: int
     ref_offsets: Tuple[int, ...] = ()  # word offsets of fields holding references
+
+
+@dataclass(frozen=True)
+class LocalInfo:
+    """One named slot in a frame, for reporting and inspection.
+
+    Two entries can share a name: a shadowed declaration is a distinct symbol
+    with its own slot. Telling them apart needs the scope ranges a debugger
+    tracks, so this table keeps them in frame order and leaves that to the
+    caller.
+    """
+    name: str
+    slot: int
+    type_name: str
+    words: int      # slots occupied: 1, 2 for a float, N for an int[N]
+    is_param: bool
 
 
 @dataclass
@@ -68,6 +96,12 @@ class FunctionInfo:
     # operand-stack entry, but a float parameter fills two slots once stored,
     # so CALL cannot assume argument i lands in local i.
     param_words: Tuple[int, ...] = ()
+    # Names of this frame's slots, in slot order. Empty unless codegen was
+    # asked for them; nothing in the interpreter loop reads it.
+    locals_: Tuple[LocalInfo, ...] = ()
+    # The file this function was declared in. A backtrace through std/ is
+    # unreadable without it: line 30 could be any of several files.
+    source_file: str = ""
 
 
 @dataclass
@@ -170,8 +204,11 @@ class QuinVM:
     """
 
     def __init__(self, code: Bytecode, functions: List[FunctionInfo], strings: Dict[int, str],
-                 structs: List[StructLayout] = None):
+                 structs: List[StructLayout] = None, source_map: SourceMap = None):
         self.code = code
+        # Optional so a hand-built VM in a test still works. Without it errors
+        # read as they always did, minus the location.
+        self.source_map = source_map or SourceMap()
         self.functions = functions
         self.func_index: Dict[str, int] = {f.name: i for i, f in enumerate(functions)}
         self.strings = strings
@@ -211,7 +248,84 @@ class QuinVM:
         self.current_fn = idx
         self.pc = fn.entry_pc
         self.frame_base = 0
-        return self._run()
+        try:
+            return self._run()
+        except VMError as e:
+            # Decorated here rather than at each of the forty raise sites, so
+            # a new check cannot forget to say where it fired.
+            raise self._locate(e) from None
+
+    # -- fault reporting -------------------------------------------------
+
+    def _call_frames(self):
+        """(function index, pc) innermost first, for the current fault.
+
+        `pc` has already advanced past the instruction being executed, so the
+        one that faulted is the previous. A suspended caller resumes at its
+        saved return_pc, which puts its CALL one before that.
+        """
+        frames = [(self.current_fn, self.pc - 1)]
+        for frame in reversed(self.call_stack):
+            frames.append((frame.fn_index, frame.return_pc - 1))
+        return frames
+
+    def _function_name(self, index: int) -> str:
+        if 0 <= index < len(self.functions):
+            return self.functions[index].name
+        return f"<function {index}>"
+
+    def _function_file(self, index: int) -> str:
+        if 0 <= index < len(self.functions):
+            return self.functions[index].source_file
+        return ""
+
+    @staticmethod
+    def _short_path(path: str) -> str:
+        """A path as the user would recognise it.
+
+        Relative to the working directory when that is genuinely shorter --
+        `std/math.ql` -- and absolute otherwise, since a file outside the tree
+        relativises to a chain of `..` that is longer and harder to read than
+        the real path.
+        """
+        if not path:
+            return ""
+        try:
+            relative = os.path.relpath(path, os.getcwd())
+        except ValueError:            # a different drive on Windows
+            return path
+        return relative if len(relative) <= len(path) else path
+
+    def _locate(self, error: VMError) -> VMError:
+        """The same error, saying where it happened."""
+        if getattr(error, "location", ""):
+            return error          # already decorated by an inner run
+        frames = self._call_frames()
+        fn_index, pc = frames[0]
+        where = self.source_map.describe(pc)
+        # Naming the file on every line is noise for a single-file program, and
+        # essential the moment a trace passes through std/.
+        spans_files = len({self._function_file(i) for i, _ in frames}) > 1
+        head_file = self._short_path(self._function_file(fn_index))
+        head_in = f"in {self._function_name(fn_index)}"
+        if spans_files and head_file:
+            head_in += f" ({head_file})"
+        header = " ".join(part for part in (where, head_in + ":") if part)
+
+        lines = [f"{header} {error.message}"]
+        # A lone frame is main, which the header already named.
+        if len(frames) > 1:
+            width = max(len(self._function_name(i)) for i, _ in frames)
+            for i, frame_pc in frames:
+                pos = self.source_map.lookup(frame_pc)
+                if pos is None:
+                    at = ""
+                elif spans_files:
+                    at = f" ({self._short_path(self._function_file(i))}:{pos[0]})"
+                else:
+                    at = f" (line {pos[0]})"
+                lines.append(f"  at {self._function_name(i):<{width}}{at}")
+        return VMError("\n".join(lines), location=where, frames=tuple(frames))
 
     # -- helpers ---------------------------------------------------------
 
@@ -247,20 +361,20 @@ class QuinVM:
     def _pop(self) -> int:
         """Pop one value, refusing to reach below the current frame's base."""
         if len(self.stack) <= self.frame_base:
-            raise VMError(f"Operand stack underflow at pc={self.pc - 1}")
+            raise VMError("Operand stack underflow")
         self.stack_is_ref.pop()
         return self.stack.pop()
 
     def _pop_tagged(self) -> Tuple[int, bool]:
         """Pop a value together with whether it is a reference."""
         if len(self.stack) <= self.frame_base:
-            raise VMError(f"Operand stack underflow at pc={self.pc - 1}")
+            raise VMError("Operand stack underflow")
         return self.stack.pop(), self.stack_is_ref.pop()
 
     def _local(self, index: int) -> int:
         if index < 0 or index >= len(self.locals):
             raise VMError(
-                f"Local index out of range at pc={self.pc - 1}: "
+                f"Local index out of range: "
                 f"index={index}, num_locals={len(self.locals)}"
             )
         return self.locals[index]
@@ -277,7 +391,7 @@ class QuinVM:
     def _set_local(self, index: int, value: int):
         if index < 0 or index >= len(self.locals):
             raise VMError(
-                f"Local index out of range at pc={self.pc - 1}: "
+                f"Local index out of range: "
                 f"index={index}, num_locals={len(self.locals)}"
             )
         self.locals[index] = value & WORD_MASK
@@ -426,7 +540,7 @@ class QuinVM:
 
     def _literal(self, sid: int) -> int:
         if sid < 0 or sid >= len(self.literals):
-            raise VMError(f"Unknown string id {sid} at pc={self.pc - 1}")
+            raise VMError(f"Unknown string id {sid}")
         return self.literals[sid]
 
     # -- collection ------------------------------------------------------
@@ -895,7 +1009,7 @@ class QuinVM:
                 # Every function pushes exactly one return value.
                 if len(self.stack) != self.frame_base + 1:
                     raise VMError(
-                        f"Unbalanced operand stack at RET (pc={self.pc - 1}): "
+                        f"Unbalanced operand stack at RET: "
                         f"expected {self.frame_base + 1} entries, found {len(self.stack)}"
                     )
                 ret_val, ret_is_ref = self.stack.pop(), self.stack_is_ref.pop()
@@ -911,12 +1025,12 @@ class QuinVM:
 
             elif op is OpCode.BOUNDS_CHECK:
                 if len(self.stack) <= self.frame_base:
-                    raise VMError(f"Operand stack underflow on BOUNDS_CHECK at pc={self.pc - 1}")
+                    raise VMError("Operand stack underflow on BOUNDS_CHECK")
                 idx = to_signed(self.stack[-1])
                 length = int(arg)
                 if idx < 0 or idx >= length:
                     raise VMError(
-                        f"Array index out of bounds at pc={self.pc - 1}: "
+                        f"Array index out of bounds: "
                         f"index={idx}, length={length}"
                     )
 
@@ -964,7 +1078,7 @@ class QuinVM:
 
             elif op is OpCode.DUP:
                 if len(self.stack) <= self.frame_base:
-                    raise VMError(f"Operand stack underflow on DUP at pc={self.pc - 1}")
+                    raise VMError("Operand stack underflow on DUP")
                 self._push_raw(self.stack[-1], self.stack_is_ref[-1])
 
             elif op is OpCode.SWAP:

@@ -3,7 +3,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Dict, List
 from . import ast as A
-from .bytecode import OpCode, Instruction, Bytecode
+from .bytecode import OpCode, Instruction, Bytecode, SourceMap, SourceMapBuilder
 from .sema import Context, Symbol
 from .compiler_types import (
     Int, Str, Bool, Float, Void, array_length, is_reference_type, word_count,
@@ -11,6 +11,21 @@ from .compiler_types import (
 
 
 COMPARISONS = ("==", "!=", "<", "<=", ">", ">=")
+
+
+@dataclass(frozen=True)
+class CompiledProgram:
+    """Everything codegen produces, named.
+
+    This was a bare tuple until the source map became a fifth member. Each
+    table is independent of the others and more will follow, so unpacking them
+    positionally at every call site had already stopped paying for itself.
+    """
+    code: Bytecode
+    functions: List[object]     # runtime.vm.FunctionInfo
+    strings: Dict[int, str]
+    structs: List[object]       # runtime.vm.StructLayout
+    source_map: SourceMap
 
 
 class CodegenError(Exception):
@@ -51,6 +66,7 @@ class LoopContext:
 @dataclass
 class FunctionLayout:
     name: str
+    source_file: str
     num_locals: int
     # Arguments, which is also how many operand-stack entries CALL pops: a
     # float is one entry there even though it is two slots once stored.
@@ -65,6 +81,9 @@ class FunctionLayout:
     # the Symbol object rather than by name, so shadowed and sibling-scope
     # declarations get distinct storage for free.
     slots: Dict[Symbol, LocalSlot] = field(default_factory=dict)
+    # The same frame described by name, in slot order, for error reporting and
+    # for a debugger. Derived from `slots`; nothing in codegen reads it.
+    local_names: List[object] = field(default_factory=list)
 
 
 class CodeGenVM:
@@ -87,6 +106,30 @@ class CodeGenVM:
         # Scopes currently open, outermost first. Used to release a scope's
         # references when a break or continue leaves it early.
         self._scopes: List[object] = []
+        self._source_map = SourceMapBuilder()
+        # The source position in force, or None outside any node.
+        self._loc = None
+
+    # -- source positions -------------------------------------------------
+    #
+    # Every instruction is attributed to the innermost node that produced it.
+    # _enter notes a node on the way in and returns the position it displaced;
+    # _leave puts that one back, so after a nested expression the enclosing
+    # statement is in force again.
+
+    def _enter(self, node: A.Node):
+        outer = self._loc
+        # A node the parser synthesised carries no position. Leaving the
+        # enclosing one in force beats attributing its code to line 0.
+        if node.line:
+            self._loc = (node.line, node.col)
+            self._source_map.mark(len(self.code), node.line, node.col)
+        return outer
+
+    def _leave(self, outer) -> None:
+        self._loc = outer
+        if outer is not None:
+            self._source_map.mark(len(self.code), outer[0], outer[1])
 
     # -- string table ----------------------------------------------------
 
@@ -167,7 +210,8 @@ class CodeGenVM:
         from runtime.vm import FunctionInfo, StructLayout
         fns = [
             FunctionInfo(fl.name, fl.entry_pc, fl.num_locals, fl.num_params,
-                         tuple(fl.ref_slots), fl.param_words)
+                         tuple(fl.ref_slots), fl.param_words,
+                         tuple(fl.local_names), fl.source_file)
             for fl in self.functions
         ]
         # The struct table doubles as the collector's object map: it gives an
@@ -179,7 +223,13 @@ class CodeGenVM:
                 word_size=info.word_size,
                 ref_offsets=tuple(f.offset for f in info.fields if is_reference_type(f.type)),
             )
-        return self.code, fns, self.strings, layouts
+        return CompiledProgram(
+            code=self.code,
+            functions=fns,
+            strings=self.strings,
+            structs=layouts,
+            source_map=self._source_map.build(),
+        )
 
     def _build_layout(self, fn: A.Function, ctx: Context) -> FunctionLayout:
         """Give every symbol sema found in this frame its own slot.
@@ -194,25 +244,41 @@ class CodeGenVM:
                 f"[{fn.line}:{fn.col}] No frame recorded for function '{fn.name}'"
             )
 
+        from runtime.vm import LocalInfo
+
         slots: Dict[Symbol, LocalSlot] = {}
         ref_slots: List[int] = []
+        local_names: List[LocalInfo] = []
+        num_params = len(fn.params)
         next_idx = 0
-        for sym in symbols:
+        for position, sym in enumerate(symbols):
             length = array_length(sym.type) or 0
             slots[sym] = LocalSlot(next_idx, length)
             if is_reference_type(sym.type):
                 ref_slots.append(next_idx)
             # An array is `length` int slots; anything else is as wide as its
             # type, which is one slot for everything but float.
-            next_idx += length if length else word_count(sym.type)
+            width = length if length else word_count(sym.type)
+            local_names.append(LocalInfo(
+                name=sym.name,
+                slot=next_idx,
+                type_name=str(sym.type),
+                words=width,
+                # Parameters lead the frame, which is what the calling
+                # convention requires, so position is enough to tell them apart.
+                is_param=position < num_params,
+            ))
+            next_idx += width
 
         return FunctionLayout(
             name=fn.name,
+            source_file=fn.source_file,
             num_locals=next_idx,
-            num_params=len(fn.params),
-            param_words=tuple(word_count(sym.type) for sym in symbols[:len(fn.params)]),
+            num_params=num_params,
+            param_words=tuple(word_count(sym.type) for sym in symbols[:num_params]),
             slots=slots,
             ref_slots=ref_slots,
+            local_names=local_names,
         )
 
     def _emit_function(self, fn: A.Function, layout: FunctionLayout, ctx: Context):
@@ -226,6 +292,12 @@ class CodeGenVM:
     # -- statements ------------------------------------------------------
 
     def _emit_stmt(self, st: A.Stmt, layout: FunctionLayout, ctx: Context):
+        """Lower a statement, recording where its instructions came from."""
+        outer = self._enter(st)
+        self._emit_stmt_body(st, layout, ctx)
+        self._leave(outer)
+
+    def _emit_stmt_body(self, st: A.Stmt, layout: FunctionLayout, ctx: Context):
         if isinstance(st, A.VarDecl):
             slot = self._slot(st, layout, ctx)
             if slot.is_array:
@@ -268,9 +340,13 @@ class CodeGenVM:
                 slot = self._array_slot(st.target.array, layout, ctx)
                 # STORE_LOCAL_IDX pops the index, then the value.
                 self._emit_expr(st.value, layout, ctx)
+                # Attribute the check to the target, so `a[i] = v` and
+                # `print(a[i])` report the same place when the index is bad.
+                outer = self._enter(st.target)
                 self._emit_expr(st.target.index, layout, ctx)
                 self.code.append(Instruction(OpCode.BOUNDS_CHECK, slot.length))
                 self.code.append(Instruction(OpCode.STORE_LOCAL_IDX, slot.index))
+                self._leave(outer)
             elif isinstance(st.target, A.FieldAccess):
                 # HEAP_STORE_FIELD pops the value, then the object reference.
                 fld = self._field_of(st.target, ctx)
@@ -570,6 +646,12 @@ class CodeGenVM:
     # -- expressions -----------------------------------------------------
 
     def _emit_expr(self, e: A.Expr, layout: FunctionLayout, ctx: Context):
+        """Lower an expression, recording where its instructions came from."""
+        outer = self._enter(e)
+        self._emit_expr_body(e, layout, ctx)
+        self._leave(outer)
+
+    def _emit_expr_body(self, e: A.Expr, layout: FunctionLayout, ctx: Context):
         if isinstance(e, A.Literal):
             if e.value is None:
                 self.code.append(Instruction(OpCode.PUSH_INT, 0))
