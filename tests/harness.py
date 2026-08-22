@@ -168,6 +168,64 @@ class QuinTestCase(unittest.TestCase):
             self.fail(f"expected the program to compile, but got: {e}")
 
 
+# -- debugger --------------------------------------------------------------
+#
+# The debugger drives itself through a callback, so a test supplies one instead
+# of a terminal. Nothing here needs stdin, and the program's own output is kept
+# apart from the session's so assertions can name one or the other.
+
+
+def debug_trace(source: str, mode, setup=None, limit: int = 500):
+    """(function, line) at every stop, running the whole program in one mode.
+
+    `setup(debugger)` runs before the program does, which is where a test sets
+    breakpoints. `limit` stops a test hanging if a step mode never advances.
+    """
+    from runtime.debugger import Debugger
+
+    program = compile_source(source)
+    stops = []
+
+    def on_stop(dbg, vm, stop):
+        stops.append((stop.frame.function, stop.frame.line))
+        if len(stops) >= limit:
+            raise AssertionError(f"more than {limit} stops; a step mode is not advancing")
+        dbg.resume(mode, vm)
+
+    debugger = Debugger(program, on_stop)
+    if setup is not None:
+        setup(debugger)
+    with redirect_stdout(io.StringIO()):
+        debugger.run(vm_for(program))
+    return stops
+
+
+def debug_session(source: str, commands) -> str:
+    """Everything the interactive front end printed, given these commands.
+
+    The program's own stdout is captured separately and discarded: a test that
+    cares about it uses run_source.
+    """
+    from compiler.debug import DebugSession
+
+    program = compile_source(source)
+    remaining = list(commands)
+    transcript = io.StringIO()
+
+    def read(_prompt: str) -> str:
+        if not remaining:
+            raise EOFError
+        return remaining.pop(0)
+
+    session = DebugSession(program, vm_for(program), read=read, out=transcript)
+    with redirect_stdout(io.StringIO()):
+        try:
+            session.run()
+        except VMError:
+            pass          # a post-mortem session ends by re-raising the fault
+    return transcript.getvalue()
+
+
 def main_wrapping(body: str) -> str:
     """Wrap statements in a `fn main(): int` that returns 0."""
     return f"fn main(): int {{\n{body}\n    return 0;\n}}"
