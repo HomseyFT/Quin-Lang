@@ -148,6 +148,37 @@ class SourceMap:
         pos = self.lookup(pc)
         return f"[{pos[0]}:{pos[1]}]" if pos else ""
 
+    # Setting a breakpoint runs the map the other way: from a line the user
+    # named to the pc to stop at. Both searches take a pc range because a line
+    # number alone is ambiguous -- the map covers every function in the program,
+    # and line 30 exists in std/math.ql as surely as in the user's file. The
+    # caller narrows to one function, whose file it knows.
+
+    def lines_in(self, start: int = 0, end: Optional[int] = None) -> Tuple[int, ...]:
+        """The source lines carrying code in `[start, end)`, ascending.
+
+        What a breakpoint can actually be set on: a blank line or a comment
+        produces no instruction and so never appears here.
+        """
+        return tuple(sorted({
+            line for pc, (line, _) in zip(self.pcs, self.positions)
+            if pc >= start and (end is None or pc < end)
+        }))
+
+    def first_pc_on_line(self, line: int, start: int = 0,
+                         end: Optional[int] = None) -> Optional[int]:
+        """The lowest pc in `[start, end)` attributed to `line`, or None.
+
+        The lowest rather than any, so a breakpoint fires as the line begins.
+        A line reached repeatedly -- a loop body, a condition re-tested each
+        iteration -- keeps one pc and so stops on every pass.
+        """
+        candidates = [
+            pc for pc, (l, _) in zip(self.pcs, self.positions)
+            if l == line and pc >= start and (end is None or pc < end)
+        ]
+        return min(candidates) if candidates else None
+
 
 class SourceMapBuilder:
     """Accumulates markers while codegen walks the AST.

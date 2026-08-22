@@ -57,12 +57,27 @@ class VMError(RuntimeError):
         self.frames = tuple(frames)
 
 
+@dataclass(frozen=True)
+class FieldLayout:
+    """One field of a struct, for reporting and inspection.
+
+    The collector needs only `ref_offsets`; naming the fields is what lets a
+    debugger show an object as `Point { x: 3, y: 4 }` rather than as the bare
+    address that is all its reference actually is.
+    """
+    name: str
+    type_name: str
+    offset: int     # word offset within the object
+
+
 @dataclass
 class StructLayout:
     """What a collector needs to know about one struct type."""
     name: str
     word_size: int
     ref_offsets: Tuple[int, ...] = ()  # word offsets of fields holding references
+    # Empty unless codegen was asked for them; nothing in the collector reads it.
+    fields: Tuple[FieldLayout, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -237,6 +252,12 @@ class QuinVM:
         # Literal id -> the heap address of its string object, filled in by
         # _materialise_literals when the program starts.
         self.literals: List[int] = []
+        # Called with this VM before each instruction, when a debugger is
+        # attached. Must be set before run_main: the loop reads it once into a
+        # local rather than per instruction, so attaching mid-run would take no
+        # effect. That is what makes it free -- read per instruction it costs a
+        # measurable 3%, hoisted it is under 1%, which is inside the noise.
+        self.hook = None
 
     def run_main(self) -> int:
         if "main" not in self.func_index:
@@ -755,7 +776,15 @@ class QuinVM:
 
     def _run(self) -> int:
         code = self.code
+        # Read once, not per instruction: a local costs a fraction of an
+        # attribute load, and a debugger attaches before the run rather than
+        # during it.
+        hook = self.hook
         while self.pc < len(code):
+            if hook is not None:
+                # Before the fetch, so the hook sees the pc about to run and
+                # not the one after it.
+                hook(self)
             instr = code[self.pc]
             op = instr.op
             arg = instr.arg

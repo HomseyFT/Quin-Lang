@@ -3,6 +3,7 @@ from pathlib import Path
 from .resolver import ImportResolver, ResolveError
 from .sema import SemanticAnalyzer, SemanticError
 from .codegen_vm import CodeGenVM, CodegenError
+from .debug import debug
 from runtime.vm import QuinVM, VMError
 import sys
 
@@ -28,6 +29,8 @@ def process_exit_code(value: int) -> int:
 def main():
     ap = argparse.ArgumentParser(description="QuinLang VM compiler/executor")
     ap.add_argument("source", type=Path, help="Source .ql file")
+    ap.add_argument("--debug", action="store_true",
+                    help="run under the interactive debugger")
     args = ap.parse_args()
 
     std_path = Path(__file__).parent.parent / "std"
@@ -57,6 +60,17 @@ def main():
 
     vm = QuinVM(program.code, program.functions, program.strings,
                 program.structs, program.source_map)
+    if args.debug:
+        # The debugger reports the fault itself, having first let the user look
+        # around the frames it happened in, so the same error still exits 3.
+        try:
+            exit_value = debug(program, vm)
+        except VMError:
+            sys.exit(EXIT_RUNTIME_ERROR)
+        # Quitting the session means the program never finished. Nothing failed,
+        # so this is not a runtime error; there is simply no value to report.
+        sys.exit(0 if exit_value is None else process_exit_code(exit_value))
+
     try:
         exit_value = vm.run_main()
     except VMError as e:

@@ -207,7 +207,7 @@ class CodeGenVM:
             layout.entry_pc = len(self.code)
             self._emit_function(fn, layout, ctx)
 
-        from runtime.vm import FunctionInfo, StructLayout
+        from runtime.vm import FieldLayout, FunctionInfo, StructLayout
         fns = [
             FunctionInfo(fl.name, fl.entry_pc, fl.num_locals, fl.num_params,
                          tuple(fl.ref_slots), fl.param_words,
@@ -222,6 +222,9 @@ class CodeGenVM:
                 name=info.name,
                 word_size=info.word_size,
                 ref_offsets=tuple(f.offset for f in info.fields if is_reference_type(f.type)),
+                fields=tuple(
+                    FieldLayout(f.name, str(f.type), f.offset) for f in info.fields
+                ),
             )
         return CompiledProgram(
             code=self.code,
