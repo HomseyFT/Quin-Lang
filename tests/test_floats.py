@@ -186,9 +186,9 @@ class TestFloatStorage(QuinTestCase):
     """The two-slot half of the design."""
 
     def test_a_float_local_reserves_two_slots(self):
-        code, functions, _, _ = compile_source(
+        functions = compile_source(
             "fn main(): int { let a: float; let b: float; let i: int; return 0; }"
-        )
+        ).functions
         main = next(f for f in functions if f.name == "main")
         self.assertEqual(main.num_locals, 5)
 
@@ -355,20 +355,20 @@ class TestFloatStructFields(QuinTestCase):
         )
 
     def test_the_object_is_sized_in_words(self):
-        _, _, _, structs = compile_source(
+        structs = compile_source(
             "struct P { x: float, tag: int } "
             "fn main(): int { let p: P = P { x: 1.0, tag: 1 }; return 0; }"
-        )
+        ).structs
         layout = next(s for s in structs if s.name == "P")
         self.assertEqual(layout.word_size, 3)
 
     def test_a_float_field_is_not_traced_as_a_reference(self):
         # A float's bit pattern can look like any address. The collector must
         # decide by the struct layout, never by inspecting the value.
-        _, _, _, structs = compile_source(
+        structs = compile_source(
             "struct P { x: float, s: str } "
             'fn main(): int { let p: P = P { x: 1.0, s: "hi" }; return 0; }'
-        )
+        ).structs
         layout = next(s for s in structs if s.name == "P")
         self.assertEqual(layout.ref_offsets, (2,))
 

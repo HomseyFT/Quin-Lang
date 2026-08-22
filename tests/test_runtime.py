@@ -404,9 +404,9 @@ class TestStrings(QuinTestCase):
     def test_literals_are_interned(self):
         # Equal literals share one table entry, so the VM materialises one
         # string object for them rather than one per occurrence.
-        _, _, strings, _ = compile_source(
+        strings = compile_source(
             'fn main(): int { print("dup"); print("dup"); print("other"); return 0; }'
-        )
+        ).strings
         self.assertEqual(sorted(strings.values()), ["dup", "other"])
 
     def test_empty_string(self):

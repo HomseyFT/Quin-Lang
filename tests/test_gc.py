@@ -13,7 +13,7 @@ from contextlib import redirect_stdout
 from runtime.vm import (
     QuinVM, KIND_RAW, KIND_STRUCT, HEADER_BYTES, HEAP_START,
 )
-from tests.harness import QuinTestCase, compile_source
+from tests.harness import QuinTestCase, compile_source, vm_for
 
 
 NODE = "struct Node { value: int, next: Node }\n"
@@ -21,8 +21,7 @@ NODE = "struct Node { value: int, next: Node }\n"
 
 def run_and_inspect(source: str):
     """Run a program and return (vm, stdout) so the heap can be examined."""
-    code, functions, strings, structs = compile_source(source)
-    vm = QuinVM(code, functions, strings, structs)
+    vm = vm_for(compile_source(source))
     buf = io.StringIO()
     with redirect_stdout(buf):
         vm.run_main()
@@ -691,8 +690,7 @@ class TestOperandStackTagging(QuinTestCase):
     """
 
     def _vm(self, source: str):
-        code, functions, strings, structs = compile_source(source)
-        return QuinVM(code, functions, strings, structs)
+        return vm_for(compile_source(source))
 
     def test_dup_copies_the_reference_flag(self):
         from compiler.bytecode import Instruction, OpCode
@@ -1155,9 +1153,9 @@ class TestScopeReleasesReferences(QuinTestCase):
 
     def test_releasing_costs_nothing_when_a_scope_holds_no_references(self):
         from compiler.bytecode import OpCode
-        code, _, _, _ = compile_source(
+        code = compile_source(
             "fn main(): int { for (let i = 0; i < 3; i = i + 1) { let x: int = i; } return 0; }"
-        )
+        ).code
         # No reference-typed declaration anywhere, so no release is emitted.
         stores = [i for i, ins in enumerate(code)
                   if ins.op is OpCode.STORE_LOCAL

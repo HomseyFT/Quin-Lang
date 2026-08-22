@@ -13,12 +13,11 @@ import unittest
 from contextlib import redirect_stdout
 
 from runtime.vm import QuinVM, KIND_STRING, HEADER_BYTES
-from tests.harness import QuinTestCase, compile_source
+from tests.harness import QuinTestCase, compile_source, vm_for
 
 
 def run_and_inspect(source: str):
-    code, functions, strings, structs = compile_source(source)
-    vm = QuinVM(code, functions, strings, structs)
+    vm = vm_for(compile_source(source))
     buf = io.StringIO()
     with redirect_stdout(buf):
         vm.run_main()
@@ -240,15 +239,15 @@ class TestHeapRepresentation(QuinTestCase):
         self.assertEqual(vm._block_end(blocks[-1]), vm.heap_ptr)
 
     def test_string_slots_are_in_the_stack_map(self):
-        _, functions, _, _ = compile_source(
-            'fn main(): int { let s: str = "a"; let n: int = 1; return 0; }')
+        functions = compile_source(
+            'fn main(): int { let s: str = "a"; let n: int = 1; return 0; }').functions
         main = next(f for f in functions if f.name == "main")
         self.assertEqual(main.ref_slots, (0,), "the str is a root, the int is not")
 
     def test_a_str_field_is_a_traced_reference(self):
-        _, _, _, structs = compile_source(
+        structs = compile_source(
             "struct Person { name: str, age: int }\n"
-            'fn main(): int { let p: Person = Person { name: "a", age: 1 }; return 0; }')
+            'fn main(): int { let p: Person = Person { name: "a", age: 1 }; return 0; }').structs
         person = next(s for s in structs if s.name == "Person")
         self.assertEqual(person.ref_offsets, (0,), "name is traced, age is not")
 

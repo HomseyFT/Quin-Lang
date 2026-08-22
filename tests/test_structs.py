@@ -10,7 +10,7 @@ import unittest
 from contextlib import redirect_stdout
 
 from runtime.vm import QuinVM, HEADER_BYTES, KIND_RAW, KIND_STRUCT
-from tests.harness import QuinTestCase, compile_source, run_source
+from tests.harness import QuinTestCase, compile_source, run_source, vm_for
 
 
 POINT = "struct Point { x: int, y: int }\n"
@@ -23,8 +23,7 @@ def run_and_inspect(source: str):
     stdout is swallowed: these tests examine the heap rather than the output,
     and without this their programs print into the test runner's own output.
     """
-    code, functions, strings, structs = compile_source(source)
-    vm = QuinVM(code, functions, strings, structs)
+    vm = vm_for(compile_source(source))
     with redirect_stdout(io.StringIO()):
         vm.run_main()
     return vm
@@ -497,9 +496,9 @@ class TestObjectLayout(QuinTestCase):
     """The header and stack map exist for a collector; pin them now."""
 
     def test_struct_table_records_reference_fields(self):
-        _, _, _, structs = compile_source(
+        structs = compile_source(
             NODE + POINT + "fn main(): int { return 0; }"
-        )
+        ).structs
         by_name = {s.name: s for s in structs}
         self.assertEqual(by_name["Node"].word_size, 2)
         # 'next' is at word 1 and is a reference; 'value' is a plain int.
@@ -507,10 +506,10 @@ class TestObjectLayout(QuinTestCase):
         self.assertEqual(by_name["Point"].ref_offsets, ())
 
     def test_stack_map_lists_reference_slots_only(self):
-        _, functions, _, _ = compile_source(
+        functions = compile_source(
             NODE + "fn main(): int { let n: Node; let h: heapptr; let i: int; "
                    "let b: bool; return 0; }"
-        )
+        ).functions
         main = next(f for f in functions if f.name == "main")
         # Slots 0 (Node) and 1 (heapptr) are references; the int and bool are not.
         self.assertEqual(main.ref_slots, (0, 1))
@@ -548,9 +547,9 @@ class TestObjectLayout(QuinTestCase):
         self.assertEqual(vm._read_word(b), 2)
 
     def test_a_struct_local_occupies_one_slot(self):
-        _, functions, _, _ = compile_source(
+        functions = compile_source(
             NODE + "fn main(): int { let a: Node; let b: Node; return 0; }"
-        )
+        ).functions
         main = next(f for f in functions if f.name == "main")
         self.assertEqual(main.num_locals, 2)
 

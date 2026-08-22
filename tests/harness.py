@@ -38,7 +38,7 @@ class Run:
 
 
 def compile_file(path: Path):
-    """Compile a .ql file to (bytecode, function table, string table, struct table)."""
+    """Compile a .ql file to a CompiledProgram."""
     resolved = ImportResolver(STD_PATH).resolve(Path(path))
     ctx = SemanticAnalyzer().analyze(resolved.program)
     return CodeGenVM().generate(resolved.program, ctx)
@@ -66,20 +66,26 @@ def warnings_for(source: str) -> list:
         return [str(w) for w in ctx.warnings]
 
 
-def run_file(path: Path) -> Run:
-    code, functions, strings, structs = compile_file(path)
+def _run(program) -> Run:
     buf = io.StringIO()
     with redirect_stdout(buf):
-        exit_value = QuinVM(code, functions, strings, structs).run_main()
+        exit_value = vm_for(program).run_main()
     return Run(buf.getvalue(), exit_value)
+
+
+def vm_for(program) -> QuinVM:
+    """A VM loaded with a CompiledProgram, source map included, so a runtime
+    error in a test reports the same location a user would see."""
+    return QuinVM(program.code, program.functions, program.strings,
+                  program.structs, program.source_map)
+
+
+def run_file(path: Path) -> Run:
+    return _run(compile_file(path))
 
 
 def run_source(source: str) -> Run:
-    code, functions, strings, structs = compile_source(source)
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        exit_value = QuinVM(code, functions, strings, structs).run_main()
-    return Run(buf.getvalue(), exit_value)
+    return _run(compile_source(source))
 
 
 class QuinTestCase(unittest.TestCase):

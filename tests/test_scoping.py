@@ -171,9 +171,9 @@ class TestFrameLayout(QuinTestCase):
 
     def test_arrays_reserve_consecutive_slots(self):
         # Two 3-element arrays plus two scalars need 8 locals.
-        code, functions, _, _ = compile_source(
+        functions = compile_source(
             "fn main(): int { let a: int[3]; let b: int[3]; let i: int; let j: int; return 0; }"
-        )
+        ).functions
         main = next(f for f in functions if f.name == "main")
         self.assertEqual(main.num_locals, 8)
 
