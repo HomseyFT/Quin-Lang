@@ -43,7 +43,7 @@ python3 -m compiler.driver_vm examples/vm_test.ql
 # -> 42
 ```
 
-The driver lexes, resolves `include`s, type-checks, compiles to bytecode, and runs it in-process. Compile errors are reported as `Import error:`, `Semantic error:`, or `Codegen error:` with a `[line:col]` prefix; runtime faults come out as `Runtime error:`.
+The driver lexes, resolves `include`s, type-checks, compiles to bytecode, and runs it in-process. Compile errors are reported as `Import error:`, `Semantic error:`, or `Codegen error:` with a `[line:col]` prefix. Runtime faults come out as `Runtime error:` and carry the same `[line:col]`, the function they happened in, and a backtrace — see [Runtime errors](#runtime-errors).
 
 A larger tour of arrays, pointers, printing, and boolean logic:
 
@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-712 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+743 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -276,7 +276,7 @@ Semantic error: [3:6] Array index 7 out of bounds for length 3
 and anything else is checked at run time by the `BOUNDS_CHECK` opcode:
 
 ```
-Runtime error: Array index out of bounds at pc=12: index=5, length=3
+Runtime error: [4:14] in main: Array index out of bounds: index=5, length=3
 ```
 
 Both apply equally to a read, an assignment target, and `@a[i]`. An overrun therefore faults instead of quietly reading or writing a neighboring local.
@@ -359,7 +359,7 @@ An uninitialized struct variable is `null`, and reaching through a null referenc
 ```quin
 let n: Node;
 println(n == null);    // true
-println(n.value);      // Runtime error: Null pointer dereference reading a field
+println(n.value);      // Runtime error: [4:15] in main: Null pointer dereference
 ```
 
 Rules worth knowing: a literal must give every field exactly once, in any order; fields are read and written but a struct has no value form for `print`; relational operators (`<`, `>`, …) do not apply to references; and a struct cannot have array-typed or `void` fields.
@@ -396,8 +396,8 @@ A silent widening would make `total / count` mean different things depending on 
 Two arithmetic mistakes fault rather than producing a value that spreads quietly:
 
 ```
-Runtime error: Float division by zero
-Runtime error: Float overflow: 9.000000360735796e+40 does not fit in a 32-bit float
+Runtime error: [3:17] in main: Float division by zero
+Runtime error: [3:15] in main: Float overflow: 9.000000360735796e+40 does not fit in a 32-bit float
 ```
 
 Integer overflow wraps and is documented as wrapping, but a float that became infinity would make every later comparison lie, and there is no way to express that in a result.
@@ -613,6 +613,42 @@ Both halves of each instruction's effect matter, not just the net: `add` nets �
 
 ---
 
+## Runtime errors
+
+A fault names the position, the function, and how the program got there:
+
+```
+Runtime error: [3:14] in depth3: Division by zero
+  at depth3 (line 3)
+  at depth2 (line 5)
+  at main   (line 7)
+```
+
+A program with a single frame prints no trace, since the header already named the only function. When the frames span more than one file — which any call into `std/` does — each line names its file instead, because a bare line number is ambiguous once a program is more than one file:
+
+```
+Runtime error: [30:14] in clamp (std/math.ql): clamp called with lo greater than hi
+  at clamp (std/math.ql:30)
+  at main  (prog.ql:3)
+```
+
+The position comes from a **source map** built during code generation: a sorted list of `pc -> (line, col)` markers, binary-searched when something goes wrong. It is stored beside the bytecode rather than on each `Instruction`, so the interpreter loop and the instruction itself are exactly the size they were, and nothing reads the table until a fault or a debugger asks for it. Markers, not one entry per instruction — a run of instructions lowered from one expression costs a single entry.
+
+Codegen attributes each instruction to the **innermost** node that produced it. It notes a node's position on the way in and restores the enclosing one on the way out, so `1 / z` reports the `/` rather than the statement containing it.
+
+Two other tables are built at the same time and for the same reason:
+
+| Table | Holds |
+| --- | --- |
+| `FunctionInfo.locals_` | Every slot in a frame by name, with its type, its width in slots, and whether it is a parameter |
+| `FunctionInfo.source_file` | Which file declared the function, so a backtrace can say |
+
+Nothing consumes the slot table yet. It exists because a debugger's `print x` needs exactly it, and because building it alongside the source map costs one pass rather than two.
+
+`CodeGenVM.generate()` returns these as a named `CompiledProgram` rather than a tuple: the tables are independent of one another and there are now five, which is past the point where unpacking them positionally at every call site pays for itself.
+
+---
+
 ## Compilation pipeline
 
 1. **Lexing** (`compiler/lexer.py`, `tokens.py`) — source text to tokens, with `//` comments, decimal and `0x` hex literals, and 16-bit range checks.
@@ -684,6 +720,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_stdlib.py` | Every standard library function, its edge cases, and `panic` |
 | `tests/test_strings.py` | Escapes, string construction, the heap representation, and collection |
 | `tests/test_floats.py` | Float storage width, the calling convention, struct fields, precision, and `std/float.ql` |
+| `tests/test_debug_info.py` | The source map, fault locations, backtraces, and the per-frame slot-name table |
 | `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 | `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
@@ -749,6 +786,6 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
 - The process exit code carries only the low byte of `main`'s return value. Compile and runtime errors use 2 and 3, which a program may also return; stderr is the unambiguous signal.
 
-Future directions: a debugger (the source mapping it needs is still the cheap thing to front-load), liveness analysis so a variable dead but still in scope stops rooting its object, and filling out `std/`.
+Future directions: an interactive debugger — breakpoints, stepping and variable inspection — on top of the source mapping and slot tables that already exist; liveness analysis so a variable dead but still in scope stops rooting its object; and filling out `std/`.
 
 The goal is to keep the compiler and VM small enough to read in one sitting and see exactly how each language feature works end to end.

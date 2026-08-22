@@ -619,10 +619,23 @@ A string is a heap object, so building one allocates and the collector reclaims 
 panic("index out of range");
 ```
 
-Stops the program and reports the message as a runtime error:
+Stops the program and reports the message as a runtime error, with the position it fired at and the calls that led there:
+
+```quin
+fn check(ok: bool): int {
+    if (!ok) { panic("index out of range"); }
+    return 1;
+}
+fn main(): int {
+    println(check(false));
+    return 0;
+}
+```
 
 ```
-Runtime error: index out of range
+Runtime error: [2:21] in check: index out of range
+  at check (line 2)
+  at main  (line 6)
 ```
 
 Nothing else in the language can report a problem, so this is how a function rejects an argument it cannot handle. The standard library uses it throughout rather than returning a plausible wrong answer.
@@ -681,6 +694,7 @@ println(ct_select(0, a, b));   // 20
 - Array indexing is bounds-checked: a literal index outside the array is a compile error, and a computed one faults at run time. `array_push` and `array_pop` are checked the same way, against the index they touch — `len` for a push, `len - 1` for a pop.
 - Pointers are untyped within their address space: a `ptr` is just a slot index, and nothing checks what kind of data lives there.
 - Pointers do not outlive the frame they point into.
+- A runtime error names its `[line:col]`, its function, and a backtrace. When the frames span more than one file each line names its file, since a line number alone is ambiguous across includes.
 - `int` wraps at 16 bits; `float` is 32-bit single precision, and its two failure cases (division by zero, overflow) fault instead of producing infinity.
 - A `float` is two slots wide, so there are no `float[N]` arrays, `@` does not apply to one, and `vm_asm` cannot name one.
 - Comparing `str` values compares content. Ordering is lexicographic by byte, with no case folding, so `"Z" < "a"` is `true`.
