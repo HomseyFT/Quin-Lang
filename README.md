@@ -43,7 +43,7 @@ python3 -m compiler.driver_vm examples/vm_test.ql
 # -> 42
 ```
 
-The driver lexes, resolves `include`s, type-checks, compiles to bytecode, and runs it in-process. Compile errors are reported as `Import error:`, `Semantic error:`, or `Codegen error:` with a `[line:col]` prefix. Runtime faults come out as `Runtime error:` and carry the same `[line:col]`, the function they happened in, and a backtrace — see [Runtime errors](#runtime-errors).
+The driver lexes, resolves `include`s, type-checks, compiles to bytecode, and runs it in-process. Compile errors are reported as `Import error:`, `Semantic error:`, or `Codegen error:` with a `[line:col]` prefix. Runtime faults come out as `Runtime error:` and carry the same `[line:col]`, the function they happened in, and a backtrace — see [Runtime errors](#runtime-errors). Add `--debug` to run the program under the [debugger](#debugger) instead.
 
 A larger tour of arrays, pointers, printing, and boolean logic:
 
@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-743 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+803 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -643,9 +643,85 @@ Two other tables are built at the same time and for the same reason:
 | `FunctionInfo.locals_` | Every slot in a frame by name, with its type, its width in slots, and whether it is a parameter |
 | `FunctionInfo.source_file` | Which file declared the function, so a backtrace can say |
 
-Nothing consumes the slot table yet. It exists because a debugger's `print x` needs exactly it, and because building it alongside the source map costs one pass rather than two.
+The slot table is what the debugger's `print x` reads; building it alongside the source map cost one pass rather than two.
 
 `CodeGenVM.generate()` returns these as a named `CompiledProgram` rather than a tuple: the tables are independent of one another and there are now five, which is past the point where unpacking them positionally at every call site pays for itself.
+
+---
+
+## Debugger
+
+`--debug` runs a program under an interactive debugger instead of straight through:
+
+```bash
+python3 -m compiler.driver_vm --debug demo.ql
+```
+
+It stops before the first statement and prompts. The commands are the ones every debugger already has, because a familiar name needs no documentation:
+
+| | |
+| --- | --- |
+| `break <fn>` / `break <line>` / `break <file>:<line>` | set a breakpoint |
+| `delete [id]`, `enable <id>`, `disable <id>`, `breakpoints` | manage them |
+| `continue` `c` | run to the next breakpoint |
+| `step` `s` / `next` `n` | one line, entering calls / stepping over them |
+| `finish` `f` | run until the selected frame returns |
+| `backtrace` `bt`, `frame <n>` | the call stack, and which frame to read |
+| `print <name>` `p`, `locals` | show one variable, or all of them |
+| `list [n]` `l` | source around the current line |
+| `help` `h`, `quit` `q` | |
+
+An empty line repeats the last command, so stepping is one keystroke.
+
+```
+QuinLang debugger. 'help' for commands.
+Stopped at main at demo.ql:9
+    9  let p: Point = Point{x: 3, y: 4};
+(qdb) break scale
+Breakpoint 1 at scale (demo.ql:4)
+(qdb) continue
+Breakpoint 1, scale at demo.ql:4
+    4  let sum: int = p.x + p.y;
+(qdb) backtrace
+-> #0 scale at demo.ql:4
+   #1 main  at demo.ql:14
+(qdb) locals
+  p    param  Point = Point { x: 3, y: 4 }
+  k    param  int = 2
+  sum  local  int = 0
+(qdb) finish
+main at demo.ql:14
+   14  total = total + scale(p, k);
+(qdb) next
+main at demo.ql:15
+   15  i = i + 1;
+(qdb) print total
+total: int = 14
+```
+
+Values are shown as the language defines them, not as raw words: a negative `int` is signed, a `float` is read from both of its slots, a `str` and a `struct` are followed into the heap, and an array prints its elements. A `struct` expands its fields by name — which is why `StructLayout` carries them — and stops at a fixed depth so a cyclic structure terminates.
+
+### How it hooks in
+
+`QuinVM` offers exactly one control point: a `hook` called with the VM before each instruction. Everything else is built on it — a breakpoint is a pc the hook recognises, and a step is a comparison against the source line and call depth the step began at.
+
+The loop reads `hook` **once into a local** before it starts, not per instruction. Read per instruction it costs a measurable ~3%; hoisted it is under 1%, which is inside the run-to-run noise. The trade is that a hook must be attached before `run_main` and cannot be swapped mid-run, which is all a debugger needs. `tests/test_debugger.py` pins that, so anyone who moves the read back into the loop gets a failing test rather than a silent 3%.
+
+The split is deliberate: `runtime/debugger.py` holds the state machine and does no I/O, `compiler/debug.py` holds the terminal session. That is what lets the tests drive the whole thing with a list of commands instead of a terminal.
+
+A fault stops one last time before it propagates. The VM does not unwind its own frames when it raises, so the entire call stack is still there to inspect at the moment the information is most wanted:
+
+```
+(qdb) continue
+Runtime error: [3:14] in risky: Division by zero
+  at risky (line 3)
+  at main  (line 7)
+The program cannot continue; inspect and then 'quit'.
+(qdb) print z
+z: int = 0
+```
+
+Quitting a faulted session still exits `3`: leaving the debugger does not unmake the fault.
 
 ---
 
@@ -721,6 +797,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_strings.py` | Escapes, string construction, the heap representation, and collection |
 | `tests/test_floats.py` | Float storage width, the calling convention, struct fields, precision, and `std/float.ql` |
 | `tests/test_debug_info.py` | The source map, fault locations, backtraces, and the per-frame slot-name table |
+| `tests/test_debugger.py` | Breakpoint resolution, each step mode, value inspection, post-mortem, and the command front end |
 | `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 | `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
@@ -770,7 +847,10 @@ There is no dependency-install step, because there are no dependencies. `tests/t
   - `bytecode.py` — opcodes and `Instruction`
   - `codegen_vm.py` — bytecode generation
   - `driver_vm.py` — CLI entry point
-- `runtime/vm.py` — the QuinVM interpreter
+  - `debug.py` — the interactive debugger session
+- `runtime/`
+  - `vm.py` — the QuinVM interpreter
+  - `debugger.py` — breakpoints, stepping, and inspection
 - `std/` — `math.ql`, `bits.ql`, `io.ql`, `list.ql`, `vec.ql`, and `prelude.ql`
 - `examples/` — small QL programs, all covered by golden tests
 - `tests/` — the test suite
@@ -786,6 +866,10 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
 - The process exit code carries only the low byte of `main`'s return value. Compile and runtime errors use 2 and 3, which a program may also return; stderr is the unambiguous signal.
 
-Future directions: an interactive debugger — breakpoints, stepping and variable inspection — on top of the source mapping and slot tables that already exist; liveness analysis so a variable dead but still in scope stops rooting its object; and filling out `std/`.
+- `print` takes a variable name, not an expression. A `struct` already shows its fields, so `print p` covers most of what `print p.x` would.
+- A shadowed name shows every declaration rather than the live one. The slot table carries no scope ranges, so which is in scope at a given pc is not knowable from it; showing all of them is honest where a guess would be confidently wrong.
+- A breakpoint on a line with no code of its own moves forward to the next line that has some.
+
+Future directions: scope ranges on the slot table, so a shadowed `print x` can name the live declaration; liveness analysis so a variable dead but still in scope stops rooting its object; and filling out `std/`.
 
 The goal is to keep the compiler and VM small enough to read in one sitting and see exactly how each language feature works end to end.
