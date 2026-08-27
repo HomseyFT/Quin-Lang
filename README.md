@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-806 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+813 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -758,6 +758,19 @@ The stack map can be per-function rather than per-instruction because locals sta
 
 Codegen never walks scopes. It turns `frame_symbols` into slots and then looks up the `Symbol` sema already resolved each node to, so the two passes cannot disagree about which `x` an `x` refers to. Symbols are compared by identity, so shadowed and sibling-scope declarations get distinct storage for free.
 
+### Opcode numbering
+
+An opcode's number is part of the instruction set, not an implementation detail: it is what a serialised program would be made of, and what an old file means when a newer compiler reads it. So they are written out explicitly rather than left to `enum.auto()`, which numbers by position — under `auto()`, inserting an opcode anywhere but the end silently renumbers every one after it, and a file written before that insert would still load, as a *different program*.
+
+The rules, enforced by `tests/test_opcodes.py`:
+
+- Add new opcodes with the next free number. Adding is additive and safe.
+- Never change a number that already exists.
+- Never reuse the number of one you remove — leave the hole and record it in `RETIRED`, so an old file fails to load rather than decoding into whatever took its place.
+- `0` is not an opcode, so a format can use it as a terminator or an absent-marker.
+
+The test pins every name to its number and fails on a renumber, a reorder, a reuse, or a return to `auto()`. Adding an opcode asks you to record it, which is the moment to notice the format grew.
+
 ### QuinVM bytecode
 
 `compiler/bytecode.py` defines the `OpCode` enum and `Instruction`; `runtime/vm.py` implements the interpreter. Values are 16-bit words held as ints masked to `0..0xFFFF`, sign-extended by anything that cares. The one exception is a `float`, which is a single operand-stack entry holding its full 32-bit pattern — see the calling convention below.
@@ -808,6 +821,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_debugger.py` | Breakpoint resolution, each step mode, value inspection, post-mortem, and the command front end |
 | `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
+| `tests/test_opcodes.py` | That opcode numbers never change meaning, since a serialised program is made of them |
 | `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
 
 Tests are written as QuinLang source strings and asserted on their output or their error message, so they exercise the whole pipeline rather than one pass:

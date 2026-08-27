@@ -1,118 +1,133 @@
 from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from typing import List, Optional, Tuple, Union
 
 
 class OpCode(Enum):
+    """The instruction set. Values are written out, never auto().
+
+    An opcode's number is what a serialised program is made of, so it is part
+    of the format and not an implementation detail. auto() numbers by position,
+    which means inserting an opcode anywhere but the end silently renumbers
+    every one after it -- and a file written before that insert would still
+    load, as a different program. Explicit values make an insert additive, and
+    tests/test_opcodes.py pins every one so a reordering fails rather than
+    quietly changing what old bytecode means.
+
+    Add new opcodes at the end with the next free number. Never reuse the
+    number of one you remove: leave the hole, so an old file fails to load
+    instead of decoding into something else. 0 is reserved as "not an opcode".
+    """
+
     # Stack and locals
-    PUSH_INT = auto()
-    LOAD_LOCAL = auto()
-    STORE_LOCAL = auto()
+    PUSH_INT = 1
+    LOAD_LOCAL = 2
+    STORE_LOCAL = 3
 
     # Arithmetic
-    ADD = auto()
-    SUB = auto()
-    MUL = auto()
-    DIV = auto()
-    MOD = auto()
-    XOR = auto()
-    AND = auto()
-    OR = auto()
-    SHL = auto()
-    SHR = auto()
-    NEG = auto()
+    ADD = 4
+    SUB = 5
+    MUL = 6
+    DIV = 7
+    MOD = 8
+    XOR = 9
+    AND = 10
+    OR = 11
+    SHL = 12
+    SHR = 13
+    NEG = 14
 
     # Comparisons (push 0/1)
-    CMP_EQ = auto()
-    CMP_NE = auto()
-    CMP_LT = auto()
-    CMP_LE = auto()
-    CMP_GT = auto()
-    CMP_GE = auto()
+    CMP_EQ = 15
+    CMP_NE = 16
+    CMP_LT = 17
+    CMP_LE = 18
+    CMP_GT = 19
+    CMP_GE = 20
 
     # Strings. A str value is the heap address of a string object, so these
     # read and build objects rather than indexing a host-side table.
-    LOAD_STR = auto()      # operand: literal id
-    STR_CMP = auto()       # push -1, 0 or 1 by content order
-    STR_LEN = auto()
-    STR_CHAR_AT = auto()   # pop index, then string
-    STR_CONCAT = auto()
-    STR_SLICE = auto()     # pop end, then start, then string
-    STR_FROM_INT = auto()  # decimal text
-    STR_FROM_CHAR = auto()
+    LOAD_STR = 21      # operand: literal id
+    STR_CMP = 22       # push -1, 0 or 1 by content order
+    STR_LEN = 23
+    STR_CHAR_AT = 24   # pop index, then string
+    STR_CONCAT = 25
+    STR_SLICE = 26     # pop end, then start, then string
+    STR_FROM_INT = 27  # decimal text
+    STR_FROM_CHAR = 28
 
     # Floats. A float is 32 bits: two consecutive slots in a frame or a heap
     # object, but a single operand-stack entry holding the IEEE 754 bit
     # pattern. Splitting it only at the storage boundary keeps every stack
     # opcode -- POP, DUP, SWAP, RET's balance check -- one entry per value.
-    PUSH_FLOAT = auto()        # operand: 32-bit bit pattern
-    LOAD_LOCAL_F = auto()      # operand: base slot; reads two words
-    STORE_LOCAL_F = auto()     # operand: base slot; writes two words
-    FADD = auto()
-    FSUB = auto()
-    FMUL = auto()
-    FDIV = auto()
-    FNEG = auto()
+    PUSH_FLOAT = 29        # operand: 32-bit bit pattern
+    LOAD_LOCAL_F = 30      # operand: base slot; reads two words
+    STORE_LOCAL_F = 31     # operand: base slot; writes two words
+    FADD = 32
+    FSUB = 33
+    FMUL = 34
+    FDIV = 35
+    FNEG = 36
     # Like STR_CMP: reduce the pair to -1/0/1 so the six integer comparison
     # opcodes can test it against zero, rather than duplicating all six.
-    FCMP = auto()
-    F_FROM_INT = auto()
-    F_TO_INT = auto()          # truncates toward zero, like integer division
-    STR_FROM_FLOAT = auto()
-    PRINT_FLOAT = auto()
-    PRINTLN_FLOAT = auto()
+    FCMP = 37
+    F_FROM_INT = 38
+    F_TO_INT = 39          # truncates toward zero, like integer division
+    STR_FROM_FLOAT = 40
+    PRINT_FLOAT = 41
+    PRINTLN_FLOAT = 42
 
     # Logical
-    NOT = auto()
-    BITNOT = auto()
+    NOT = 43
+    BITNOT = 44
 
     # Control flow
-    JMP = auto()           # operand: target pc
-    JZ = auto()            # operand: target pc; pops the value it tests
-    JNZ = auto()           # operand: target pc; pops the value it tests
+    JMP = 45           # operand: target pc
+    JZ = 46            # operand: target pc; pops the value it tests
+    JNZ = 47           # operand: target pc; pops the value it tests
 
     # Function calls
-    CALL = auto()          # operand: function index
-    RET = auto()
+    CALL = 48          # operand: function index
+    RET = 49
 
     # Arrays as locals: base index is encoded in operand
-    LOAD_LOCAL_IDX = auto()
-    STORE_LOCAL_IDX = auto()
-    BOUNDS_CHECK = auto()      # operand: element count; inspects the index without popping it
+    LOAD_LOCAL_IDX = 50
+    STORE_LOCAL_IDX = 51
+    BOUNDS_CHECK = 52      # operand: element count; inspects the index without popping it
 
     # Indirect access using "pointer" as local index
-    LOAD_INDIRECT = auto()     # pop p; push locals[p]
-    STORE_INDIRECT = auto()    # pop v, pop p; locals[p] = v
-    MEMCPY_LOCALS = auto()     # pop count, src, dst
-    MEMSET_LOCALS = auto()     # pop count, value, dst
+    LOAD_INDIRECT = 53     # pop p; push locals[p]
+    STORE_INDIRECT = 54    # pop v, pop p; locals[p] = v
+    MEMCPY_LOCALS = 55     # pop count, src, dst
+    MEMSET_LOCALS = 56     # pop count, value, dst
 
     # Stack management
-    POP = auto()
-    DUP = auto()
-    SWAP = auto()
+    POP = 57
+    DUP = 58
+    SWAP = 59
 
     # Builtin-style I/O
-    PRINT_INT = auto()
-    PRINT_STR = auto()
-    PRINTLN_INT = auto()
-    PRINTLN_STR = auto()
+    PRINT_INT = 60
+    PRINT_STR = 61
+    PRINTLN_INT = 62
+    PRINTLN_STR = 63
 
     # Heap operations
-    ALLOC = auto()             # pop size in bytes
-    ALLOC_TYPED = auto()       # operand: struct type id
-    HEAP_LOAD = auto()
-    HEAP_STORE = auto()
+    ALLOC = 64             # pop size in bytes
+    ALLOC_TYPED = 65       # operand: struct type id
+    HEAP_LOAD = 66
+    HEAP_STORE = 67
     # The field offset is an operand rather than an ADD on the address, so the
     # null check tests the object reference itself: adding first would turn a
     # null base into a small non-zero address and read whatever is there.
-    HEAP_LOAD_FIELD = auto()   # operand: word offset; pop ref
-    HEAP_STORE_FIELD = auto()  # operand: word offset; pop value, pop ref
-    HEAP_LOAD_FIELD_F = auto()   # operand: word offset; pop ref, push the float in two words there
-    HEAP_STORE_FIELD_F = auto()  # operand: word offset; pop float, pop ref
-    GC = auto()
-    PANIC = auto()             # pop a message id and stop the program
+    HEAP_LOAD_FIELD = 68   # operand: word offset; pop ref
+    HEAP_STORE_FIELD = 69  # operand: word offset; pop value, pop ref
+    HEAP_LOAD_FIELD_F = 70   # operand: word offset; pop ref, push the float in two words there
+    HEAP_STORE_FIELD_F = 71  # operand: word offset; pop float, pop ref
+    GC = 72
+    PANIC = 73             # pop a message id and stop the program
 
 
 Operand = Union[int, None]
