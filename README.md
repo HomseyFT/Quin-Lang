@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-878 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+888 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -764,6 +764,19 @@ total: int = 14
 
 Values are shown as the language defines them, not as raw words: a negative `int` is signed, a `float` is read from both of its slots, a `str` and a `struct` are followed into the heap, and an array prints its elements. A `struct` expands its fields by name — which is why `StructLayout` carries them — and stops at a fixed depth so a cyclic structure terminates.
 
+### Program output
+
+The VM does not print. It writes to a `ProgramIO`, which defaults to the console so a plain run is unchanged:
+
+```python
+vm = QuinVM(program.code, program.functions, program.strings,
+            program.structs, program.source_map, io=CaptureIO())
+```
+
+This matters as soon as anything else owns stdout. A debug adapter speaks its protocol there, so a single `println` from the debugged program would corrupt the stream; an editor embedding the VM has no process stdout to write to at all. Six opcodes route through it — `PRINT`/`PRINTLN` for int, str and float — and nothing else in the interpreter writes.
+
+Only the *program's* output goes through it. Compile diagnostics, warnings and runtime faults are the tool talking, not the program: they travel as exceptions and reach stderr from the driver, so redirecting a program's output never swallows the reason it stopped.
+
 ### How it hooks in
 
 `QuinVM` offers exactly one control point: a `hook` called with the VM before each instruction. Everything else is built on it — a breakpoint is a pc the hook recognises, and a step is a comparison against the source line and call depth the step began at.
@@ -879,6 +892,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 | `tests/test_enums.py` | Enum declaration, variant construction, match, exhaustiveness, interning, and tracing |
+| `tests/test_program_io.py` | That program output goes where the caller says, and never to a stdout it does not own |
 | `tests/test_opcodes.py` | That opcode numbers never change meaning, since a serialised program is made of them |
 | `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
 
@@ -931,6 +945,7 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - `runtime/`
   - `vm.py` — the QuinVM interpreter
   - `debugger.py` — breakpoints, stepping, and inspection
+  - `program_io.py` — where a program's output goes
 - `std/` — `math.ql`, `bits.ql`, `io.ql`, `list.ql`, `vec.ql`, and `prelude.ql`
 - `examples/` — small QL programs, all covered by golden tests
 - `tests/` — the test suite

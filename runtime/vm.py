@@ -6,6 +6,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple
 from compiler.bytecode import OpCode, Instruction, Bytecode, SourceMap
+from runtime.program_io import ConsoleIO, ProgramIO
 
 WORD_MASK = 0xFFFF
 SIGN_BIT = 0x8000
@@ -224,8 +225,14 @@ class QuinVM:
     """
 
     def __init__(self, code: Bytecode, functions: List[FunctionInfo], strings: Dict[int, str],
-                 structs: List[StructLayout] = None, source_map: SourceMap = None):
+                 structs: List[StructLayout] = None, source_map: SourceMap = None,
+                 io: ProgramIO = None):
         self.code = code
+        # Where the program's output goes. Defaulting to the console keeps a
+        # plain run unchanged; anything embedding the VM passes its own, which
+        # is the only way a debug adapter can keep the program's text off the
+        # stream its protocol is using.
+        self.io: ProgramIO = io or ConsoleIO()
         # Optional so a hand-built VM in a test still works. Without it errors
         # read as they always did, minus the location.
         self.source_map = source_map or SourceMap()
@@ -1146,22 +1153,22 @@ class QuinVM:
                 self._push_raw(a, a_ref)
 
             elif op is OpCode.PRINT_FLOAT:
-                print(format_float(self._pop_float()), end="")
+                self.io.write(format_float(self._pop_float()))
 
             elif op is OpCode.PRINTLN_FLOAT:
-                print(format_float(self._pop_float()))
+                self.io.write(format_float(self._pop_float()) + "\n")
 
             elif op is OpCode.PRINT_INT:
-                print(to_signed(self._pop()), end="")
+                self.io.write(str(to_signed(self._pop())))
 
             elif op is OpCode.PRINT_STR:
-                print(self._string_text(self._pop()), end="")
+                self.io.write(self._string_text(self._pop()))
 
             elif op is OpCode.PRINTLN_INT:
-                print(to_signed(self._pop()))
+                self.io.write(str(to_signed(self._pop())) + "\n")
 
             elif op is OpCode.PRINTLN_STR:
-                print(self._string_text(self._pop()))
+                self.io.write(self._string_text(self._pop()) + "\n")
 
             elif op is OpCode.ALLOC:
                 self._push(self._alloc_raw(to_signed(self._pop())), True)

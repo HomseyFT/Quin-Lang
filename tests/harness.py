@@ -73,11 +73,15 @@ def _run(program) -> Run:
     return Run(buf.getvalue(), exit_value)
 
 
-def vm_for(program) -> QuinVM:
+def vm_for(program, io=None) -> QuinVM:
     """A VM loaded with a CompiledProgram, source map included, so a runtime
-    error in a test reports the same location a user would see."""
+    error in a test reports the same location a user would see.
+
+    `io` sends the program's output somewhere other than stdout, which is what
+    anything embedding the VM does.
+    """
     return QuinVM(program.code, program.functions, program.strings,
-                  program.structs, program.source_map)
+                  program.structs, program.source_map, io)
 
 
 def run_file(path: Path) -> Run:
