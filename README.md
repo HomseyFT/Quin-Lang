@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-888 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+911 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -522,6 +522,36 @@ Syntax error in prog.ql:1:29: Character U+2192 does not fit in a byte; a str hol
 
 Source files are otherwise UTF-8, so this only constrains what goes inside quotes.
 
+### Input
+
+A program can read its input and its arguments, which is the difference between a language for computing something and a language for processing something.
+
+```quin
+include "std/input.ql";
+
+fn main(): int {
+    while (true) {
+        match (next_line()) {
+            Input::Line(text) => { println(text); }
+            Input::End        => { break; }
+        }
+    }
+    return 0;
+}
+```
+
+The primitive underneath is `read_line()`, and it keeps the line's terminator. That is the whole design: a blank line is `"\n"` and only end of input is `""`, so the two can never be confused. Stripping the newline inside `read_line` would make the last line of a file indistinguishable from the end of it — and the symptom is not a crash but a loop that stops early or never stops at all.
+
+`std/input.ql` turns that convention into an `enum`, which is the version worth writing programs against: a rule you have to remember becomes a variant you have to account for. It is not in the prelude, because it declares a type and a type name is global once included — the same reason `std/list.ql` and `std/vec.ql` are left out.
+
+Input is **bytes**, consistent with a `str` holding one byte per character: a UTF-8 character arrives as several, and one too wide for a byte is a runtime fault rather than a silent mangling.
+
+Arguments come through `argc()` and `argv(i)`. `argc()` counts what the host supplied and may be zero, so a program indexes from 0 rather than assuming `argv(0)` exists — the driver puts the program path there as C does, but an embedded VM supplies whatever it has. Everything after the source file belongs to the program:
+
+```bash
+python3 -m compiler.driver_vm prog.ql --verbose input.txt
+```
+
 ### The two address spaces
 
 QuinLang has two kinds of memory, and they are **separate types** so that an address from one cannot be used with the other.
@@ -893,6 +923,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
 | `tests/test_enums.py` | Enum declaration, variant construction, match, exhaustiveness, interning, and tracing |
 | `tests/test_program_io.py` | That program output goes where the caller says, and never to a stdout it does not own |
+| `tests/test_input.py` | `read_line`, `argc`/`argv`, and `std/input.ql` — mostly the line/end-of-input boundary |
 | `tests/test_opcodes.py` | That opcode numbers never change meaning, since a serialised program is made of them |
 | `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
 
@@ -946,7 +977,7 @@ There is no dependency-install step, because there are no dependencies. `tests/t
   - `vm.py` — the QuinVM interpreter
   - `debugger.py` — breakpoints, stepping, and inspection
   - `program_io.py` — where a program's output goes
-- `std/` — `math.ql`, `bits.ql`, `io.ql`, `list.ql`, `vec.ql`, and `prelude.ql`
+- `std/` — `math.ql`, `bits.ql`, `io.ql`, `input.ql`, `list.ql`, `vec.ql`, and `prelude.ql`
 - `examples/` — small QL programs, all covered by golden tests
 - `tests/` — the test suite
 

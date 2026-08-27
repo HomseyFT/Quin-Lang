@@ -226,13 +226,17 @@ class QuinVM:
 
     def __init__(self, code: Bytecode, functions: List[FunctionInfo], strings: Dict[int, str],
                  structs: List[StructLayout] = None, source_map: SourceMap = None,
-                 io: ProgramIO = None):
+                 io: ProgramIO = None, args: List[str] = None):
         self.code = code
         # Where the program's output goes. Defaulting to the console keeps a
         # plain run unchanged; anything embedding the VM passes its own, which
         # is the only way a debug adapter can keep the program's text off the
         # stream its protocol is using.
         self.io: ProgramIO = io or ConsoleIO()
+        # The program's arguments. The driver puts the program path first, as
+        # C does, but nothing here invents one: an embedded VM supplies what it
+        # has, so argc() may legitimately be zero.
+        self.args: List[str] = list(args or [])
         # Optional so a hand-built VM in a test still works. Without it errors
         # read as they always did, minus the location.
         self.source_map = source_map or SourceMap()
@@ -552,6 +556,23 @@ class QuinVM:
         if length & 1:
             self.heap[addr + length] = 0
         return addr
+
+    def _string_from_text(self, text: str, what: str) -> int:
+        """A heap string from host text, checked to fit.
+
+        A QuinLang str is one byte per character. Anything wider has to be
+        rejected here rather than at the encode, which would raise a Python
+        UnicodeEncodeError with nothing to say about where it came from. The
+        check covers every source of outside text -- any ProgramIO
+        implementation, any argument -- not just the console.
+        """
+        for ch in text:
+            if ord(ch) > 0xFF:
+                raise VMError(
+                    f"{what} contains U+{ord(ch):04X}, which does not fit in a "
+                    f"byte; a str holds one byte per character"
+                )
+        return self._alloc_string(text.encode("latin-1"))
 
     def _string_bytes(self, addr: int) -> bytes:
         """The characters of the string object at `addr`."""
@@ -1187,6 +1208,23 @@ class QuinVM:
                 if type_id < 0 or type_id >= len(self.variants):
                     raise VMError(f"Unknown variant type id {type_id}")
                 self._push(self.variants[type_id], True)
+
+            elif op is OpCode.READ_LINE:
+                self._push(
+                    self._string_from_text(self.io.read_line(), "input"), True)
+
+            elif op is OpCode.ARGC:
+                self._push(len(self.args))
+
+            elif op is OpCode.ARGV:
+                index = to_signed(self._pop())
+                if index < 0 or index >= len(self.args):
+                    raise VMError(
+                        f"argv index out of bounds: index={index}, "
+                        f"argc={len(self.args)}"
+                    )
+                self._push(
+                    self._string_from_text(self.args[index], "an argument"), True)
 
             elif op is OpCode.GC:
                 self.collect()

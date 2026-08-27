@@ -1,0 +1,8 @@
+arguments: 0
+input:
+  1: ada lovelace
+  3: grace hopper
+  4: alan turing
+lines: 4
+blank: 1
+longest: 12

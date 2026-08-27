@@ -18,6 +18,7 @@ from typing import Optional, Tuple
 from compiler.resolver import ImportResolver, ResolveError
 from compiler.sema import SemanticAnalyzer, SemanticError
 from compiler.codegen_vm import CodeGenVM, CodegenError
+from runtime.program_io import CaptureIO
 from runtime.vm import QuinVM, VMError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -66,30 +67,42 @@ def warnings_for(source: str) -> list:
         return [str(w) for w in ctx.warnings]
 
 
-def _run(program) -> Run:
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        exit_value = vm_for(program).run_main()
-    return Run(buf.getvalue(), exit_value)
+def _run(program, stdin: str = "", args=None) -> Run:
+    """Run a program with its I/O captured, never the process's.
+
+    Output goes to a sink rather than through redirect_stdout, and input comes
+    from `stdin` rather than the terminal the tests are running in. A test that
+    reads input would otherwise block on whatever stdin the runner happened to
+    have, which is not a thing to discover in CI.
+    """
+    sink = CaptureIO(stdin)
+    exit_value = vm_for(program, sink, args).run_main()
+    return Run(sink.text, exit_value)
 
 
-def vm_for(program, io=None) -> QuinVM:
+def vm_for(program, io=None, args=None) -> QuinVM:
     """A VM loaded with a CompiledProgram, source map included, so a runtime
     error in a test reports the same location a user would see.
 
-    `io` sends the program's output somewhere other than stdout, which is what
-    anything embedding the VM does.
+    `io` sends the program's output somewhere other than stdout, and `args` is
+    what argc()/argv() report -- both of which anything embedding the VM
+    supplies for itself.
     """
     return QuinVM(program.code, program.functions, program.strings,
-                  program.structs, program.source_map, io)
+                  program.structs, program.source_map, io, args)
 
 
-def run_file(path: Path) -> Run:
-    return _run(compile_file(path))
+def run_file(path: Path, stdin: str = None) -> Run:
+    """Run a .ql file. Input comes from `<name>.in` beside it when it exists,
+    so an example that reads can still have one fixed expected output."""
+    if stdin is None:
+        fixture = path.with_suffix(".in")
+        stdin = fixture.read_text(encoding="utf-8") if fixture.exists() else ""
+    return _run(compile_file(path), stdin)
 
 
-def run_source(source: str) -> Run:
-    return _run(compile_source(source))
+def run_source(source: str, stdin: str = "", args=None) -> Run:
+    return _run(compile_source(source), stdin, args)
 
 
 class QuinTestCase(unittest.TestCase):
@@ -107,6 +120,12 @@ class QuinTestCase(unittest.TestCase):
     def assertPrints(self, source: str, *lines: str):
         """Assert a program prints exactly these lines, in order."""
         self.assertOutput(source, "\n".join(lines))
+
+    def assertPrintsGiven(self, source: str, expected: str, stdin: str = "",
+                          args=None):
+        """assertOutput for a program that reads input or arguments."""
+        actual = run_source(source, stdin, args).stdout
+        self.assertEqual(actual.strip("\n"), expected.strip("\n"))
 
     def assertExprPrints(self, expr: str, expected: str):
         """Assert `println(<expr>);` inside a bare main prints `expected`."""
@@ -199,8 +218,7 @@ def debug_trace(source: str, mode, setup=None, limit: int = 500):
     debugger = Debugger(program, on_stop)
     if setup is not None:
         setup(debugger)
-    with redirect_stdout(io.StringIO()):
-        debugger.run(vm_for(program))
+    debugger.run(vm_for(program, CaptureIO()))
     return stops
 
 
@@ -221,12 +239,12 @@ def debug_session(source: str, commands) -> str:
             raise EOFError
         return remaining.pop(0)
 
-    session = DebugSession(program, vm_for(program), read=read, out=transcript)
-    with redirect_stdout(io.StringIO()):
-        try:
-            session.run()
-        except VMError:
-            pass          # a post-mortem session ends by re-raising the fault
+    session = DebugSession(program, vm_for(program, CaptureIO()),
+                           read=read, out=transcript)
+    try:
+        session.run()
+    except VMError:
+        pass              # a post-mortem session ends by re-raising the fault
     return transcript.getvalue()
 
 

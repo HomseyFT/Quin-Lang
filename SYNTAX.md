@@ -580,6 +580,9 @@ Always available and lowered directly by the compiler; they cannot be shadowed b
 | `int_to_float(n: int): float` | Widen an int. The only implicit-free way into `float`. |
 | `float_to_int(x: float): int` | Truncate toward zero. Faults if the result is outside `-32768..32767`. |
 | `float_to_str(x: float): str` | The same text `println` would print. |
+| `read_line(): str` | The next input line **with its terminator**, or `""` at end of input. |
+| `argc(): int` | How many arguments the host supplied. May be zero. |
+| `argv(i: int): str` | Argument `i`. Faults if `i` is outside `0..argc() - 1`. |
 | `gc(): void` | Force a garbage collection. |
 | `panic(msg: str): void` | Stop the program, reporting `msg`. |
 | `ct_eq(a: int, b: int): bool` | Equality, intended to be branchless. |
@@ -666,6 +669,47 @@ A string is a heap object, so building one allocates and the collector reclaims 
 - An uninitialised `str` is the empty string. There is no null string, and `null` is not assignable to a `str`.
 - A string may contain a nul: the length is stored in the object, so `\0` is an ordinary character rather than a terminator.
 - `std/string.ql` builds searching, trimming, case conversion and parsing on top of these.
+
+### Input: `read_line` / `argc` / `argv`
+
+`read_line()` keeps the line's terminator. That is what makes end of input
+unambiguous: a blank line is `"\n"`, and only end of input is `""`.
+
+```quin
+while (true) {
+    let line: str = read_line();
+    if (str_len(line) == 0) { break; }   // end of input, never a blank line
+    print(line);
+}
+```
+
+Stripping the terminator inside `read_line` would make the last line of a file
+indistinguishable from the end of it. `std/input.ql` wraps the convention in an
+enum for code that would rather match than compare lengths:
+
+```quin
+include "std/input.ql";
+
+match (next_line()) {
+    Input::Line(text) => { println(text); }   // terminator already stripped
+    Input::End        => { }
+}
+```
+
+Input is **bytes**. A `str` holds one byte per character, so a UTF-8 character
+arrives as several, and a character too wide for a byte is a runtime fault
+rather than a silent mangling.
+
+`argc()` counts what the host supplied and may be zero, so a program indexes
+from 0 rather than assuming `argv(0)` exists. Run through the driver, `argv(0)`
+is the program path and anything after it follows, as in C:
+
+```bash
+python3 -m compiler.driver_vm prog.ql alpha beta
+```
+
+Everything after the source file belongs to the program, so it may take flags
+of its own without the driver claiming them.
 
 ### `panic`
 

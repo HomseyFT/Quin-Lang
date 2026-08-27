@@ -134,6 +134,12 @@ class OpCode(Enum):
     TAG_OF = 74            # pop a reference, push its struct type id
     LOAD_VARIANT = 75      # operand: type id; push the interned payload-free variant
 
+    # Program input. A line keeps its terminator so that "" means end of input
+    # and a blank line does not, which is the fgets convention.
+    READ_LINE = 76         # push the next input line, or "" at end of input
+    ARGC = 77              # push the argument count, including the program name
+    ARGV = 78              # pop an index, push that argument
+
 
 Operand = Union[int, None]
 

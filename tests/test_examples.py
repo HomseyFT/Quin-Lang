@@ -1,5 +1,9 @@
 """Every example must compile, run, and print exactly its golden output.
 
+An example that reads input is fed `examples/<name>.in`, so it still has one
+fixed expected output. Examples never read the real stdin: the harness supplies
+an empty one when there is no fixture.
+
 The goldens live in tests/golden/<name>.out. Regenerate them after an
 intentional change with:
 
@@ -32,6 +36,13 @@ class TestExamples(QuinTestCase):
         stems = {p.stem for p in EXAMPLES}
         orphans = [g.name for g in GOLDEN_PATH.glob("*.out") if g.stem not in stems]
         self.assertEqual(orphans, [], "golden files with no matching example")
+
+    def test_no_orphan_input_fixtures(self):
+        # An example that reads is fed examples/<name>.in, so a fixture whose
+        # program is gone would silently stop being used.
+        stems = {p.stem for p in EXAMPLES}
+        orphans = [f.name for f in EXAMPLES_PATH.glob("*.in") if f.stem not in stems]
+        self.assertEqual(orphans, [], "input fixtures with no matching example")
 
 
 def _make_test(path):

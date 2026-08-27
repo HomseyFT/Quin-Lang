@@ -1078,6 +1078,16 @@ class CodeGenVM:
             # will pop it.
             self.code.append(Instruction(OpCode.PUSH_INT, 0))
             return
+        if name == "read_line" and not e.args:
+            self.code.append(Instruction(OpCode.READ_LINE))
+            return
+        if name == "argc" and not e.args:
+            self.code.append(Instruction(OpCode.ARGC))
+            return
+        if name == "argv" and len(e.args) == 1:
+            self._emit_expr(e.args[0], layout, ctx)
+            self.code.append(Instruction(OpCode.ARGV))
+            return
         if name == "gc" and not e.args:
             self.code.append(Instruction(OpCode.GC))
             self.code.append(Instruction(OpCode.PUSH_INT, 0))  # void result

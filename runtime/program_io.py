@@ -10,9 +10,10 @@ This is the program's own I/O and nothing else. Compiler diagnostics, warnings
 and the VM's error reports are the *tool* talking, not the program; they go to
 stderr from the driver and do not come through here.
 
-Reading arrives with the `read_line()` builtin. Until there is something to
-read, this describes writing only -- an interface with a method no
-implementation can honour is worse than one that grows when it needs to.
+Reading follows the same rule, and uses the convention `fgets` and Python's own
+`readline` already use: a line comes back **with its terminator**, and the empty
+string means end of input. That is what makes end of input unambiguous without
+a second call to ask about it -- a blank line is `"\n"`, never `""`.
 """
 
 from __future__ import annotations
@@ -30,6 +31,19 @@ class ProgramIO(Protocol):
         never has to know which one it is serving.
         """
 
+    def read_line(self) -> str:
+        """The next line **including its terminator**, or `""` at end of input.
+
+        Keeping the terminator is what makes the two cases distinguishable: a
+        blank line is `"\n"` and only end of input is empty. An implementation
+        that strips newlines makes the last line of input look like the end of
+        it.
+
+        Every character must fit in a byte, since that is what a QuinLang `str`
+        holds. The VM checks rather than trusting this, because the check has
+        to cover every implementation and not just the one below.
+        """
+
 
 class ConsoleIO:
     """Straight to stdout, which is what a program run from a shell wants.
@@ -42,6 +56,22 @@ class ConsoleIO:
     def write(self, text: str) -> None:
         sys.stdout.write(text)
 
+    def read_line(self) -> str:
+        """Read bytes, not text.
+
+        QuinLang is byte-oriented -- one byte per character, which is why
+        `str_char_at` returns 0..255 -- so input is taken from the binary
+        buffer and mapped straight through. Reading `sys.stdin` as text would
+        decode UTF-8 first and hand back characters that do not fit in a byte.
+
+        The fallback covers a stdin with no binary buffer, which happens when
+        something embeds the interpreter and substitutes a text stream.
+        """
+        buffer = getattr(sys.stdin, "buffer", None)
+        if buffer is not None:
+            return buffer.readline().decode("latin-1")
+        return sys.stdin.readline()
+
 
 class CaptureIO:
     """Collects output instead of printing it.
@@ -51,11 +81,17 @@ class CaptureIO:
     stdout, where something else is already talking.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, stdin: str = "") -> None:
         self.chunks: List[str] = []
+        # Split with the terminators kept, so the queue holds exactly what
+        # read_line is supposed to return.
+        self._pending: List[str] = stdin.splitlines(keepends=True)
 
     def write(self, text: str) -> None:
         self.chunks.append(text)
+
+    def read_line(self) -> str:
+        return self._pending.pop(0) if self._pending else ""
 
     @property
     def text(self) -> str:

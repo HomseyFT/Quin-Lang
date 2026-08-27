@@ -91,6 +91,9 @@ FROZEN = {
     "PANIC": 73,
     "TAG_OF": 74,
     "LOAD_VARIANT": 75,
+    "READ_LINE": 76,
+    "ARGC": 77,
+    "ARGV": 78,
 }
 
 # Numbers of opcodes that once existed and were removed. A retired number is

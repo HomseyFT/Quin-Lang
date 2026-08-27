@@ -41,4 +41,13 @@ def get_builtins() -> Dict[str, BuiltinSig]:
         "int_to_float":  (["int"], "float"),
         "float_to_int":  (["float"], "int"),
         "float_to_str":  (["float"], "str"),
+        # Input. read_line keeps the line's terminator, so "" is end of input
+        # and a blank line is "\n"; std/input.ql wraps that in an enum for
+        # code that would rather match than compare lengths.
+        "read_line":  ([], "str"),
+        # argc() counts what the host supplied, so a program cannot assume
+        # argv(0) exists: the driver puts the program path there as C does, but
+        # an embedded VM supplies whatever it likes, including nothing.
+        "argc":       ([], "int"),
+        "argv":       (["int"], "str"),
     }
