@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-911 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+937 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -924,6 +924,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_enums.py` | Enum declaration, variant construction, match, exhaustiveness, interning, and tracing |
 | `tests/test_program_io.py` | That program output goes where the caller says, and never to a stdout it does not own |
 | `tests/test_input.py` | `read_line`, `argc`/`argv`, and `std/input.ql` — mostly the line/end-of-input boundary |
+| `tests/test_dap_protocol.py` | DAP framing: byte-counted lengths, split reads, and malformed streams |
 | `tests/test_opcodes.py` | That opcode numbers never change meaning, since a serialised program is made of them |
 | `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
 
@@ -977,6 +978,8 @@ There is no dependency-install step, because there are no dependencies. `tests/t
   - `vm.py` — the QuinVM interpreter
   - `debugger.py` — breakpoints, stepping, and inspection
   - `program_io.py` — where a program's output goes
+- `dap/` — a Debug Adapter Protocol server, so editors can drive the debugger
+  - `protocol.py` — message framing
 - `std/` — `math.ql`, `bits.ql`, `io.ql`, `input.ql`, `list.ql`, `vec.ql`, and `prelude.ql`
 - `examples/` — small QL programs, all covered by golden tests
 - `tests/` — the test suite

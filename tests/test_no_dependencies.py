@@ -16,9 +16,9 @@ from pathlib import Path
 from tests.harness import REPO_ROOT
 
 # Packages that are part of this project rather than something to install.
-FIRST_PARTY = {"compiler", "runtime", "tests"}
+FIRST_PARTY = {"compiler", "dap", "runtime", "tests"}
 
-SOURCE_DIRS = ("compiler", "runtime", "tests")
+SOURCE_DIRS = ("compiler", "dap", "runtime", "tests")
 
 
 def python_files():
