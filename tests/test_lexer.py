@@ -81,6 +81,23 @@ class TestStrings(QuinTestCase):
     def test_empty_string(self):
         self.assertEqual(literals('""'), [""])
 
+    def test_a_character_above_a_byte_is_rejected(self):
+        # A str is one byte per character. This used to reach the VM and fail
+        # at startup with a Python UnicodeEncodeError and no source position.
+        with self.assertRaises(LexError) as cm:
+            Lexer('"ab\u2192"').tokenize()
+        self.assertIn("U+2192", str(cm.exception))
+        self.assertIn("does not fit in a byte", str(cm.exception))
+
+    def test_the_whole_latin1_range_is_accepted(self):
+        # The boundary is a byte, not ASCII: these encode to one byte each.
+        self.assertEqual(literals('"\u00e9\u00ff"'), ["éÿ"])
+
+    def test_the_error_points_at_the_offending_character(self):
+        with self.assertRaises(LexError) as cm:
+            Lexer('"ab\u65e5"').tokenize()
+        self.assertEqual(cm.exception.col, 4, "the character, not the quote")
+
 
 class TestCommentsAndWhitespace(QuinTestCase):
     def test_line_comment_is_skipped(self):

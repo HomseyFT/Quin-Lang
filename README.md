@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-803 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+806 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -458,6 +458,14 @@ A string holds characters and never references, so the collector keeps one alive
 Unlike the other heap types, **there is no null string**. An uninitialised `str` is the empty string, matching `int` starting at zero, so no string operation needs a null check and `null` is not assignable to a `str`.
 
 String literals support the escapes `\n`, `\t`, `\r`, `\0`, `\\` and `\"`. An unrecognised escape is a lex error rather than a silently preserved backslash.
+
+Because a character is a byte, a literal may only contain characters that fit in one — `U+0000` to `U+00FF`. Anything above that is rejected where it is written:
+
+```
+Syntax error in prog.ql:1:29: Character U+2192 does not fit in a byte; a str holds one byte per character
+```
+
+Source files are otherwise UTF-8, so this only constrains what goes inside quotes.
 
 ### The two address spaces
 

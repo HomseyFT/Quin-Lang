@@ -9,7 +9,7 @@ The reference for QuinLang's surface syntax and built-ins. Programs are compiled
 - **Keywords**: `fn let return if else while for break continue true false null int str void ptr heapptr print println vm_asm include struct`. These cannot be used as identifiers.
 - **Integer literals**: decimal (`123`) or hexadecimal (`0xFF`, `0XFF`). A literal must fit in 16 bits (`0..65535`); larger values are a lex error. There are no negative literals — `-1` is the unary `-` operator applied to `1`.
 - **Float literals**: digits, a `.`, then digits — `1.5`, `3.0`. Both sides are required: `1.` is a lex error, and `.5` does not parse as an expression at all. There is no exponent notation; `1e5` is a lex error rather than lexing as `1` followed by `e5`. A literal too large for a 32-bit float is rejected.
-- **String literals**: `"..."`, delimited by double quotes, may span lines. The escapes `\n`, `\t`, `\r`, `\0`, `\\` and `\"` are recognised; any other character after a backslash is a lex error, so a typo is reported rather than silently kept as two characters.
+- **String literals**: `"..."`, delimited by double quotes, may span lines. The escapes `\n`, `\t`, `\r`, `\0`, `\\` and `\"` are recognised; any other character after a backslash is a lex error, so a typo is reported rather than silently kept as two characters. A `str` stores one byte per character, so a literal may only contain `U+0000` through `U+00FF`; a character above that is a lex error naming its codepoint. Source files are otherwise UTF-8 — the limit applies inside quotes, not to comments or the file at large.
 - **Whitespace** is insignificant.
 
 ## Program structure

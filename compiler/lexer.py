@@ -175,6 +175,16 @@ class Lexer:
                     )
                 value_chars.append(ESCAPES[esc])
                 continue
+            if ord(ch) > 0xFF:
+                # A str is a byte per character -- str_len counts bytes and
+                # str_char_at returns one. Caught here rather than at startup,
+                # where encoding the literal into the heap used to fail with a
+                # Python UnicodeEncodeError and no source position at all.
+                raise LexError(
+                    f"Character U+{ord(ch):04X} does not fit in a byte; "
+                    f"a str holds one byte per character",
+                    self.line, self.col - 1,
+                )
             value_chars.append(ch)
         if self._is_at_end():
             raise LexError("Unterminated string literal", open_line, open_col)
