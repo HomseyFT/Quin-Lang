@@ -1,9 +1,7 @@
 import argparse
 import os
 from pathlib import Path
-from .resolver import ImportResolver, ResolveError
-from .sema import SemanticAnalyzer, SemanticError
-from .codegen_vm import CodeGenVM, CodegenError
+from .pipeline import CompileError, compile_path, describe_error
 from .debug import debug
 from runtime.vm import QuinVM, VMError
 import sys
@@ -49,29 +47,15 @@ def main():
                     help="arguments passed to the program as argv(1) onward")
     args = ap.parse_args()
 
-    std_path = Path(__file__).parent.parent / "std"
-
     try:
-        resolver = ImportResolver(std_path)
-        resolved = resolver.resolve(args.source)
-        ast = resolved.program
-
-        ctx = SemanticAnalyzer().analyze(ast)
-        codegen = CodeGenVM()
-        program = codegen.generate(ast, ctx)
-    except ResolveError as e:
-        print(f"Import error: {e}", file=sys.stderr)
-        sys.exit(EXIT_COMPILE_ERROR)
-    except SemanticError as e:
-        print(f"Semantic error: {e}", file=sys.stderr)
-        sys.exit(EXIT_COMPILE_ERROR)
-    except CodegenError as e:
-        print(f"Codegen error: {e}", file=sys.stderr)
+        program, warnings = compile_path(args.source)
+    except CompileError as e:
+        print(describe_error(e), file=sys.stderr)
         sys.exit(EXIT_COMPILE_ERROR)
 
     # Warnings go to stderr so piping stdout stays clean, and change neither
     # the exit code nor whether the program runs.
-    for warning in ctx.warnings:
+    for warning in warnings:
         print(f"Warning: {warning}", file=sys.stderr)
 
     # argv(0) is the program, as in C. The values are re-read as bytes so a

@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-937 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+965 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -807,6 +807,25 @@ This matters as soon as anything else owns stdout. A debug adapter speaks its pr
 
 Only the *program's* output goes through it. Compile diagnostics, warnings and runtime faults are the tool talking, not the program: they travel as exceptions and reach stderr from the driver, so redirecting a program's output never swallows the reason it stopped.
 
+### Editors: the debug adapter
+
+`dap/` is a [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/) server, so VS Code, Neovim, Emacs and Zed can drive the same debugger from one implementation:
+
+```bash
+python3 -m dap                 # stdio; the client spawns this
+python3 -m dap --server 4711   # TCP on 127.0.0.1, for an editor that connects
+```
+
+It runs a program to completion with its output in the debug console and an exit code at the end. Breakpoints and stepping are the next milestones; the state machine underneath is the same `runtime/debugger.py` the terminal client drives.
+
+Two decisions in it are worth naming.
+
+**Compiling and starting are different moments.** `launch` compiles; `configurationDone` starts. Clients disagree about which of those they send first, so whichever arrives second is the one that starts the program. Starting on `launch` is the common shortcut and the reason adapters race their own breakpoint configuration.
+
+**The adapter's stdout is carrying the protocol**, which is why `ProgramIO` exists. A program that printed directly to it would corrupt the stream — so program output travels as `output` events instead, and the same split resolves the problem the terminal debugger has, where the REPL and a reading program compete for one terminal. Here they are simply different channels.
+
+The one thing DAP cannot express is reading input: it has no standard reverse request for it, so a program run under the adapter sees an empty stdin. That reports as end of input rather than as a blank line, so a reading program terminates instead of misreading.
+
 ### How it hooks in
 
 `QuinVM` offers exactly one control point: a `hook` called with the VM before each instruction. Everything else is built on it — a breakpoint is a pc the hook recognises, and a step is a comparison against the source line and call depth the step began at.
@@ -925,6 +944,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_program_io.py` | That program output goes where the caller says, and never to a stdout it does not own |
 | `tests/test_input.py` | `read_line`, `argc`/`argv`, and `std/input.ql` — mostly the line/end-of-input boundary |
 | `tests/test_dap_protocol.py` | DAP framing: byte-counted lengths, split reads, and malformed streams |
+| `tests/test_dap_session.py` | The adapter's lifecycle, output events, exit codes, and both client orderings |
 | `tests/test_opcodes.py` | That opcode numbers never change meaning, since a serialised program is made of them |
 | `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
 
@@ -980,6 +1000,8 @@ There is no dependency-install step, because there are no dependencies. `tests/t
   - `program_io.py` — where a program's output goes
 - `dap/` — a Debug Adapter Protocol server, so editors can drive the debugger
   - `protocol.py` — message framing
+  - `session.py` — lifecycle, request dispatch, and events
+  - `__main__.py` — entry point and transport selection
 - `std/` — `math.ql`, `bits.ql`, `io.ql`, `input.ql`, `list.ql`, `vec.ql`, and `prelude.ql`
 - `examples/` — small QL programs, all covered by golden tests
 - `tests/` — the test suite
