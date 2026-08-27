@@ -38,6 +38,7 @@ class TokenType(Enum):
     PIPE = auto()
     SHL = auto()
     SHR = auto()
+    FAT_ARROW = auto()   # '=>', only in a match arm
 
     # Literals
     IDENTIFIER = auto()
@@ -69,6 +70,8 @@ class TokenType(Enum):
     VM_ASM = auto()
     INCLUDE = auto()
     STRUCT = auto()
+    ENUM = auto()
+    MATCH = auto()
 
     EOF = auto()
 
@@ -96,6 +99,8 @@ KEYWORDS = {
     "vm_asm": TokenType.VM_ASM,
     "include": TokenType.INCLUDE,
     "struct": TokenType.STRUCT,
+    "enum": TokenType.ENUM,
+    "match": TokenType.MATCH,
 }
 
 @dataclass

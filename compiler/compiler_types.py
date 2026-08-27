@@ -92,6 +92,49 @@ class StructInfo:
         return StructType(self.name, 2)
 
 
+@dataclass(frozen=True)
+class EnumType(Type):
+    """A reference to one of an enum's variants: one word, like any other
+    reference. Which variant it is lives in the object's heap header, where the
+    collector already reads a type id -- so the tag costs nothing extra and the
+    collector needs no changes to trace a variant's payload.
+
+    Subclassed for the same reason StructType is: a dataclass __eq__ requires
+    both sides to be the same class, so an enum named Point and a struct named
+    Point stay distinct types.
+    """
+
+
+@dataclass
+class VariantInfo(StructInfo):
+    """One variant's layout. A variant *is* a struct at runtime: same header,
+    same type id, same field offsets, allocated and traced the same way. The
+    only additions are which enum it belongs to and where it sits in it."""
+    enum_name: str = ""
+    index: int = 0
+
+
+@dataclass
+class EnumInfo:
+    """A named set of variants.
+
+    An enum has no type id of its own -- there is never an object of type
+    `Result`, only an `Ok` or an `Err` -- so ids belong to the variants, in the
+    same space as struct ids because the collector indexes one table by them.
+    """
+    name: str
+    variants: List[VariantInfo] = field(default_factory=list)
+
+    def variant_named(self, name: str) -> Optional[VariantInfo]:
+        for v in self.variants:
+            if v.name == name:
+                return v
+        return None
+
+    def type(self) -> EnumType:
+        return EnumType(self.name, 2)
+
+
 def word_count(t: Type) -> int:
     """How many 16-bit slots a value of this type occupies.
 
@@ -108,17 +151,21 @@ def is_struct_type(t: Type) -> bool:
     return isinstance(t, StructType)
 
 
+def is_enum_type(t: Type) -> bool:
+    return isinstance(t, EnumType)
+
+
 def is_reference_type(t: Type) -> bool:
     """Whether values of this type are heap addresses the GC must trace. A str
     counts: a str slot roots its string, and a str field must be traced."""
-    return is_struct_type(t) or t == HeapPtr or t == Str
+    return is_struct_type(t) or is_enum_type(t) or t == HeapPtr or t == Str
 
 
 def is_nullable(t: Type) -> bool:
     """Whether null may stand in for a value of this type. Not the same
     question as is_reference_type: a string is a heap reference, but an
     uninitialised str is the empty string, so there is no null string."""
-    return is_struct_type(t) or t == HeapPtr
+    return is_struct_type(t) or is_enum_type(t) or t == HeapPtr
 
 
 def assignable(target: Type, value: Type) -> bool:
@@ -157,7 +204,8 @@ def array_length_from_name(name: Optional[str]) -> Optional[int]:
     return n
 
 
-def type_from_name(name: str, structs: Optional[Dict[str, "StructInfo"]] = None) -> Type:
+def type_from_name(name: str, structs: Optional[Dict[str, "StructInfo"]] = None,
+                   enums: Optional[Dict[str, "EnumInfo"]] = None) -> Type:
     if not isinstance(name, str):
         raise UnknownTypeError(f"Invalid type name {name!r}")
     n = array_length_from_name(name)
@@ -167,6 +215,8 @@ def type_from_name(name: str, structs: Optional[Dict[str, "StructInfo"]] = None)
         return BUILTIN_TYPES[name]
     if structs and name in structs:
         return structs[name].type()
+    if enums and name in enums:
+        return enums[name].type()
     raise UnknownTypeError(f"Unknown type '{name}'")
 
 

@@ -374,16 +374,27 @@ class Debugger:
         if ref == 0:
             return "null"
         layout = self._layout_at(vm, ref)
-        if layout is None or not layout.fields:
+        if layout is None:
+            return f"<{type_name} at {ref}>"
+        if layout.is_variant and not layout.fields:
+            # A variant carrying nothing is written as a bare name, so that is
+            # how it reads back.
+            return layout.name
+        if not layout.fields:
             return f"<{type_name} at {ref}>"
         if depth >= MAX_STRUCT_DEPTH:
             # A cyclic or deep structure: stop rather than recur forever.
             return f"<{layout.name} at {ref}>"
-        parts = []
-        for f in layout.fields:
-            addr = ref + f.offset * 2
-            parts.append(f"{f.name}: {self._format_field(vm, addr, f.type_name, depth + 1)}")
-        return f"{layout.name} {{ " + ", ".join(parts) + " }"
+        values = [
+            self._format_field(vm, ref + f.offset * 2, f.type_name, depth + 1)
+            for f in layout.fields
+        ]
+        if layout.is_variant:
+            # A variant's payload is positional, so showing the field names
+            # would show `_0`, which is not something anyone wrote.
+            return f"{layout.name}(" + ", ".join(values) + ")"
+        named = (f"{f.name}: {v}" for f, v in zip(layout.fields, values))
+        return f"{layout.name} {{ " + ", ".join(named) + " }"
 
     def _format_field(self, vm: QuinVM, addr: int, type_name: str, depth: int) -> str:
         try:

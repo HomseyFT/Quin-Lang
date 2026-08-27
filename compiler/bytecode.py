@@ -129,6 +129,11 @@ class OpCode(Enum):
     GC = 72
     PANIC = 73             # pop a message id and stop the program
 
+    # Sum types. A variant is a struct at run time, so its heap header already
+    # carries the tag: TAG_OF reads the type id the collector reads.
+    TAG_OF = 74            # pop a reference, push its struct type id
+    LOAD_VARIANT = 75      # operand: type id; push the interned payload-free variant
+
 
 Operand = Union[int, None]
 

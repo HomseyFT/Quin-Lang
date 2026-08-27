@@ -78,6 +78,11 @@ class StructLayout:
     ref_offsets: Tuple[int, ...] = ()  # word offsets of fields holding references
     # Empty unless codegen was asked for them; nothing in the collector reads it.
     fields: Tuple[FieldLayout, ...] = ()
+    # Whether this layout is an enum variant rather than a struct. The
+    # collector does not care -- a variant is traced exactly like a struct --
+    # but a payload-free variant is interned rather than allocated, and a
+    # debugger renders `Ok(5)` differently from `Point { x: 5 }`.
+    is_variant: bool = False
 
 
 @dataclass(frozen=True)
@@ -252,6 +257,11 @@ class QuinVM:
         # Literal id -> the heap address of its string object, filled in by
         # _materialise_literals when the program starts.
         self.literals: List[int] = []
+        # Struct type id -> the heap address of the one instance of a
+        # payload-free variant, or NULL_ADDR for everything else. A variant
+        # that carries nothing is a constant, so allocating one per use would
+        # be pure collector pressure for no observable difference.
+        self.variants: List[int] = []
         # Called with this VM before each instruction, when a debugger is
         # attached. Must be set before run_main: the loop reads it once into a
         # local rather than per instruction, so attaching mid-run would take no
@@ -263,6 +273,7 @@ class QuinVM:
         if "main" not in self.func_index:
             raise VMError("No 'main' function defined")
         self._materialise_literals()
+        self._materialise_variants()
         idx = self.func_index["main"]
         fn = self.functions[idx]
         self.locals = [0] * fn.num_locals
@@ -559,6 +570,19 @@ class QuinVM:
         for sid, text in self.strings.items():
             self.literals[sid] = self._alloc_string(text.encode("latin-1"))
 
+    def _materialise_variants(self):
+        """Allocate the one instance of each payload-free variant.
+
+        Same reasoning as the string literals above, and materialised straight
+        after them for the same reason: these are permanent roots, so putting
+        them at the bottom of the heap means compaction always finds them
+        already in place.
+        """
+        self.variants = [NULL_ADDR] * len(self.structs)
+        for type_id, layout in enumerate(self.structs):
+            if layout is not None and layout.is_variant and layout.word_size == 0:
+                self.variants[type_id] = self._alloc_struct(type_id)
+
     def _literal(self, sid: int) -> int:
         if sid < 0 or sid >= len(self.literals):
             raise VMError(f"Unknown string id {sid}")
@@ -611,8 +635,12 @@ class QuinVM:
             if is_ref and value != NULL_ADDR:
                 yield value
         # String literals live in the heap but are named by the bytecode, not
-        # by any variable, so they are roots for the whole run.
+        # by any variable, so they are roots for the whole run. The interned
+        # payload-free variants are named the same way and live just as long.
         for addr in self.literals:
+            if addr != NULL_ADDR:
+                yield addr
+        for addr in self.variants:
             if addr != NULL_ADDR:
                 yield addr
 
@@ -700,6 +728,8 @@ class QuinVM:
         # that from being a silent assumption if materialisation ever changes.
         for i, addr in enumerate(self.literals):
             self.literals[i] = moved(addr)
+        for i, addr in enumerate(self.variants):
+            self.variants[i] = moved(addr)
 
         for hdr in self._blocks():
             if not self._is_marked(hdr) or self._kind(hdr) != KIND_STRUCT:
@@ -1135,6 +1165,21 @@ class QuinVM:
 
             elif op is OpCode.ALLOC:
                 self._push(self._alloc_raw(to_signed(self._pop())), True)
+
+            elif op is OpCode.TAG_OF:
+                ref = self._pop()
+                if ref == NULL_ADDR:
+                    raise VMError("Null reference in match")
+                hdr = ref - HEADER_BYTES
+                if hdr < HEAP_START or self._kind(hdr) != KIND_STRUCT:
+                    raise VMError(f"Value at {ref} is not a variant")
+                self._push(self._detail(hdr))
+
+            elif op is OpCode.LOAD_VARIANT:
+                type_id = int(arg)
+                if type_id < 0 or type_id >= len(self.variants):
+                    raise VMError(f"Unknown variant type id {type_id}")
+                self._push(self.variants[type_id], True)
 
             elif op is OpCode.GC:
                 self.collect()

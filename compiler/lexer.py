@@ -133,7 +133,13 @@ class Lexer:
         if c == '!':
             self._add_token(TokenType.BANG_EQUAL if self._match('=') else TokenType.BANG); return
         if c == '=':
-            self._add_token(TokenType.EQUAL_EQUAL if self._match('=') else TokenType.EQUAL); return
+            if self._match('='):
+                self._add_token(TokenType.EQUAL_EQUAL)
+            elif self._match('>'):
+                self._add_token(TokenType.FAT_ARROW)
+            else:
+                self._add_token(TokenType.EQUAL)
+            return
         if c == '<':
             if self._match('<'):
                 self._add_token(TokenType.SHL); return

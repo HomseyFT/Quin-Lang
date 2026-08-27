@@ -118,6 +118,24 @@ class For(Stmt):
     body: List[Stmt]
 
 @dataclass
+class MatchArm(Node):
+    """One arm of a match.
+
+    `variant` is None for the catch-all `_`, which is why it is optional rather
+    than a separate node: everything else about an arm is the same.
+    `bindings` names the payload positionally and is empty for a variant that
+    carries none.
+    """
+    variant: Optional[str]
+    bindings: List[str]
+    body: List[Stmt]
+
+@dataclass
+class Match(Stmt):
+    subject: Expr
+    arms: List[MatchArm]
+
+@dataclass
 class Break(Stmt):
     pass
 
@@ -155,6 +173,18 @@ class StructDef(Node):
     fields: List[FieldDef]
 
 @dataclass
+class VariantDef(Node):
+    name: str
+    # Payload types by position. Empty for a variant that carries nothing,
+    # which is stored as one interned instance rather than allocated per use.
+    payload: List[str] = field(default_factory=list)
+
+@dataclass
+class EnumDef(Node):
+    name: str
+    variants: List[VariantDef]
+
+@dataclass
 class Include(Node):
     path: str
 
@@ -163,3 +193,4 @@ class Program(Node):
     includes: List[Include]
     functions: List[Function]
     structs: List[StructDef] = field(default_factory=list)
+    enums: List[EnumDef] = field(default_factory=list)

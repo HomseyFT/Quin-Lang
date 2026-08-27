@@ -19,12 +19,15 @@ class Parser:
             includes.append(self._include())
         funcs: List[A.Function] = []
         structs: List[A.StructDef] = []
+        enums: List[A.EnumDef] = []
         while not self._is_at_end():
             if self._check(TokenType.STRUCT):
                 structs.append(self._struct_def())
+            elif self._check(TokenType.ENUM):
+                enums.append(self._enum_def())
             else:
                 funcs.append(self._function())
-        return A.Program(includes, funcs, structs)
+        return A.Program(includes, funcs, structs, enums)
 
     def _struct_def(self) -> A.StructDef:
         self._consume(TokenType.STRUCT, "Expected 'struct'")
@@ -40,6 +43,43 @@ class Parser:
                 break
         self._consume(TokenType.RIGHT_BRACE, "Expected '}' after struct fields")
         return A.StructDef(name_tok.lexeme, fields, line=name_tok.line, col=name_tok.col)
+
+    def _enum_def(self) -> A.EnumDef:
+        """`enum Name { Variant, Variant(type, type), }`
+
+        Payloads are positional, so a variant declares types where a struct
+        declares `name: type` pairs. A trailing comma is allowed, as it is in
+        a struct.
+        """
+        self._consume(TokenType.ENUM, "Expected 'enum'")
+        name_tok = self._consume(TokenType.IDENTIFIER, "Expected enum name")
+        self._consume(TokenType.LEFT_BRACE, "Expected '{' after enum name")
+        variants: List[A.VariantDef] = []
+        while not self._check(TokenType.RIGHT_BRACE):
+            v_tok = self._consume(TokenType.IDENTIFIER, "Expected variant name")
+            payload: List[str] = []
+            if self._match(TokenType.LEFT_PAREN):
+                # `Variant()` is spelled `Variant`: an empty payload list and
+                # an absent one would otherwise be two ways to say the same
+                # thing, and only one of them can be the interned singleton.
+                if self._check(TokenType.RIGHT_PAREN):
+                    tok = self._peek()
+                    raise ParseError(
+                        f"Variant '{v_tok.lexeme}' has an empty payload list; "
+                        f"write '{v_tok.lexeme}' without parentheses",
+                        tok.line, tok.col,
+                    )
+                while True:
+                    payload.append(self._type_name())
+                    if not self._match(TokenType.COMMA):
+                        break
+                self._consume(TokenType.RIGHT_PAREN, "Expected ')' after variant payload")
+            variants.append(A.VariantDef(v_tok.lexeme, payload,
+                                         line=v_tok.line, col=v_tok.col))
+            if not self._match(TokenType.COMMA):
+                break
+        self._consume(TokenType.RIGHT_BRACE, "Expected '}' after enum variants")
+        return A.EnumDef(name_tok.lexeme, variants, line=name_tok.line, col=name_tok.col)
 
     def _include(self) -> A.Include:
         path_tok = self._consume(TokenType.STRING, "Expected path string after 'include'")
@@ -133,6 +173,46 @@ class Parser:
 
         return base
 
+    def _match_stmt(self, kw_tok) -> A.Match:
+        """`match (subject) { Variant(a, b) => { ... } _ => { ... } }`
+
+        The subject is parenthesised, as an `if` or `while` condition is. That
+        is not only for consistency: `match r {` is ambiguous, because an
+        identifier followed by a brace is how a struct literal begins, so the
+        subject would swallow the arms. Arms are not comma-separated, since
+        each one already ends in a block.
+        """
+        self._consume(TokenType.LEFT_PAREN, "Expected '(' after 'match'")
+        subject = self._expression()
+        self._consume(TokenType.RIGHT_PAREN, "Expected ')' after match subject")
+        self._consume(TokenType.LEFT_BRACE, "Expected '{' before match arms")
+        arms: List[A.MatchArm] = []
+        while not self._check(TokenType.RIGHT_BRACE):
+            arms.append(self._match_arm())
+        self._consume(TokenType.RIGHT_BRACE, "Expected '}' after match arms")
+        if not arms:
+            raise ParseError("A match needs at least one arm", kw_tok.line, kw_tok.col)
+        return A.Match(subject, arms, line=kw_tok.line, col=kw_tok.col)
+
+    def _match_arm(self) -> A.MatchArm:
+        tok = self._consume(TokenType.IDENTIFIER, "Expected a variant name or '_'")
+        # `_` is an ordinary identifier everywhere else, so the catch-all is
+        # recognised by name here rather than by a token of its own.
+        variant = None if tok.lexeme == "_" else tok.lexeme
+        bindings: List[str] = []
+        if self._match(TokenType.LEFT_PAREN):
+            if variant is None:
+                raise ParseError("'_' cannot bind a payload", tok.line, tok.col)
+            while True:
+                b = self._consume(TokenType.IDENTIFIER, "Expected a name to bind")
+                bindings.append(b.lexeme)
+                if not self._match(TokenType.COMMA):
+                    break
+            self._consume(TokenType.RIGHT_PAREN, "Expected ')' after arm bindings")
+        self._consume(TokenType.FAT_ARROW, "Expected '=>' after the arm pattern")
+        body = self._block()
+        return A.MatchArm(variant, bindings, body, line=tok.line, col=tok.col)
+
     def _block(self) -> List[A.Stmt]:
         self._consume(TokenType.LEFT_BRACE, "Expected '{' to start block")
         stmts: List[A.Stmt] = []
@@ -209,6 +289,8 @@ class Parser:
                 value = self._expression()
             self._consume(TokenType.SEMICOLON, "Expected ';' after return value")
             return A.Return(value, line=tok.line, col=tok.col)
+        if self._match(TokenType.MATCH):
+            return self._match_stmt(self._previous())
         if self._match(TokenType.IF):
             tok = self._previous()
             self._consume(TokenType.LEFT_PAREN, "Expected '(' after 'if'")

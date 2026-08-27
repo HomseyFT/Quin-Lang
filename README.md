@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-813 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+865 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -363,6 +363,55 @@ println(n.value);      // Runtime error: [4:15] in main: Null pointer dereferenc
 ```
 
 Rules worth knowing: a literal must give every field exactly once, in any order; fields are read and written but a struct has no value form for `print`; relational operators (`<`, `>`, …) do not apply to references; and a struct cannot have array-typed or `void` fields.
+
+### Sum types
+
+A struct says a value has *all* of these fields. An enum says it is *one* of these shapes:
+
+```quin
+enum Result {
+    Ok(int),
+    DivideByZero,
+    NotADigit(int),
+}
+
+fn checked_div(a: int, b: int): Result {
+    if (b == 0) { return DivideByZero; }
+    return Ok(a / b);
+}
+
+fn main(): int {
+    match (checked_div(10, 0)) {
+        Ok(value)     => { println(value); }
+        DivideByZero  => { println("divided by zero"); }
+        NotADigit(c)  => { println(c); }
+    }
+    return 0;
+}
+```
+
+This is what lets a library report a failure without stopping the program. `panic` is still there for a broken invariant, but "the caller gave me a zero" is not that — it is an outcome, and now it can be returned as one. Because the failure is in the type, the caller cannot read the answer without first saying what happens when there isn't one.
+
+- Payloads are **positional**: `Ok(int)` declares one, `Ok(5)` builds it, `Ok(v)` binds it.
+- A variant carrying nothing is written bare: `DivideByZero`, never `DivideByZero()`. The declaration refuses `A()` for the same reason — one value, one spelling.
+- **Variant names are global**, like struct and function names, which is what lets `Ok(5)` be written without naming its enum. The cost is that two enums cannot share a variant name; the collision is reported at compile time and names the enum that claimed it first.
+- The subject of a match is parenthesised, as an `if` condition is. Not only for consistency: `match r {` is ambiguous, because an identifier followed by a brace is how a struct literal begins, so the subject would swallow the arms.
+- A match must be exhaustive. `_` covers the rest, and warns if there is no rest to cover — that arm is the one that would silently absorb a variant added later.
+
+```
+Semantic error: [7:5] match on 'Result' does not cover: DivideByZero, NotADigit
+Warning: [9:9] '_' covers no remaining variant of 'Result'
+```
+
+An enum reference is nullable, so covering every variant is not a promise that the value *is* one of them. Matching a null subject faults, exactly as reading a field of a null struct does.
+
+#### What it cost the runtime
+
+Almost nothing, because of a coincidence worth naming. Every heap object already carries a type id in its header — the collector reads it to find which of the object's words are references. A variant is a struct at run time: same header, same layout, an entry in the same table. So **the tag is the type id**, `TAG_OF` reads the field the collector was already reading, and the collector itself needed no changes at all.
+
+A match lowers to `TAG_OF` and a compare-and-jump chain, patched the way an `if` is. There is no indexed-jump opcode: an enum has a handful of variants, so a chain costs a couple of compares and keeps the instruction set smaller.
+
+A variant carrying nothing is a constant, so it is **interned**, not allocated: one immortal instance per variant, materialised at startup and rooted for the whole run, exactly as string literals are. A list of a thousand `Cons` cells shares one `Nil`, and an enum of bare variants allocates nothing at all no matter how often it is used.
 
 ### Floats
 
@@ -821,6 +870,7 @@ python3 -m unittest tests.test_sema -v         # one module
 | `tests/test_debugger.py` | Breakpoint resolution, each step mode, value inspection, post-mortem, and the command front end |
 | `tests/test_driver.py` | The CLI as a real process: exit codes, warnings, error reporting |
 | `tests/test_examples.py` | Every `examples/*.ql` against its golden output |
+| `tests/test_enums.py` | Enum declaration, variant construction, match, exhaustiveness, interning, and tracing |
 | `tests/test_opcodes.py` | That opcode numbers never change meaning, since a serialised program is made of them |
 | `tests/test_no_dependencies.py` | That nothing outside the standard library is imported, and that the sources still parse as Python 3.10 |
 
@@ -888,6 +938,8 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
 - The process exit code carries only the low byte of `main`'s return value. Compile and runtime errors use 2 and 3, which a program may also return; stderr is the unambiguous signal.
 
+- Variant names share one global namespace, so two enums cannot both declare `Ok`. That is the price of writing `Ok(5)` instead of `Result::Ok(5)`, and it is why `std/` declares no enums: doing so would claim those names for every program that includes it.
+- A match is a statement, not an expression. `let x = match (r) { ... }` is not a thing; an arm assigns or returns instead.
 - `print` takes a variable name, not an expression. A `struct` already shows its fields, so `print p` covers most of what `print p.x` would.
 - A shadowed name shows every declaration rather than the live one. The slot table carries no scope ranges, so which is in scope at a given pc is not knowable from it; showing all of them is honest where a guess would be confidently wrong.
 - A breakpoint on a line with no code of its own moves forward to the next line that has some.

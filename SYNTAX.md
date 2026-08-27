@@ -388,6 +388,57 @@ let m: Node = null;          // explicit
 
 `null` has no type of its own, so it cannot be inferred: `let x = null;` is an error. It is not assignable to `int` or `ptr`, and a `Point` is never assignable to a `Node`.
 
+## Sum types
+
+### `enum`
+
+```quin
+enum Result {
+    Ok(int),
+    DivideByZero,
+    NotADigit(int),
+}
+```
+
+- Declared at the top level, like a struct, and visible across the whole merged program.
+- A variant's payload is **positional**: types, not `name: type` pairs.
+- A variant with no payload is written without parentheses. `A()` is a syntax error in a declaration and in a use — one value, one spelling.
+- Every enum needs at least one variant.
+- **Variant names are global.** Two enums cannot declare the same variant name, and a variant cannot share a name with a struct, an enum, a function, or a built-in type.
+- A variant may carry its own enum, so `enum List { Nil, Cons(int, List) }` is legal; names are registered before payload types are resolved.
+- A variant cannot carry an array or a `void`.
+
+### Construction
+
+```quin
+let a: Result = Ok(5);          // payload: a call
+let b: Result = DivideByZero;   // no payload: a bare name
+let c: Result = null;           // an enum reference is nullable
+```
+
+A construction has the *enum's* type, not the variant's. There is no way to declare a variable of a variant type — `let x: Ok;` is not a thing.
+
+### `match`
+
+```quin
+match (subject) {
+    Ok(value)     => { println(value); }
+    DivideByZero  => { println("divided by zero"); }
+    _             => { println("something else"); }
+}
+```
+
+- The subject is parenthesised, as in `if` and `while`. Required: `match r {` would parse as the struct literal `r { ... }`.
+- Arms are not comma-separated; each ends in a block.
+- The pattern is a variant name, optionally binding its payload positionally, or `_` for the rest.
+- `_` may not bind, and no arm may follow it.
+- A variant may appear at most once.
+- The binding count must equal the payload count.
+- Bindings are ordinary locals scoped to their arm, so two arms may bind the same name and a binding may shadow an outer one.
+- A match is a **statement**, not an expression.
+- It must cover every variant, or carry a `_`. A `_` with nothing left to cover is a warning, not an error.
+- Matching a null subject is a runtime fault: `Null reference in match`.
+
 ## Expressions
 
 ### Literals

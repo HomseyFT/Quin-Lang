@@ -7,6 +7,7 @@ from .bytecode import OpCode, Instruction, Bytecode, SourceMap, SourceMapBuilder
 from .sema import Context, Symbol
 from .compiler_types import (
     Int, Str, Bool, Float, Void, array_length, is_reference_type, word_count,
+    VariantInfo,
 )
 
 
@@ -216,8 +217,12 @@ class CodeGenVM:
         ]
         # The struct table doubles as the collector's object map: it gives an
         # object's size and which of its words are references.
-        layouts = [None] * len(ctx.structs)
-        for info in ctx.structs.values():
+        # Variants share this table with structs: a variant is a heap object
+        # with a type id, and the collector reads its ref_offsets the same way.
+        # That is the whole reason sum types cost the collector nothing.
+        described = list(ctx.structs.values()) + list(ctx.variants.values())
+        layouts = [None] * (max((i.type_id for i in described), default=-1) + 1)
+        for info in described:
             layouts[info.type_id] = StructLayout(
                 name=info.name,
                 word_size=info.word_size,
@@ -225,6 +230,7 @@ class CodeGenVM:
                 fields=tuple(
                     FieldLayout(f.name, str(f.type), f.offset) for f in info.fields
                 ),
+                is_variant=isinstance(info, VariantInfo),
             )
         return CompiledProgram(
             code=self.code,
@@ -398,6 +404,8 @@ class CodeGenVM:
             self.code.append(Instruction(OpCode.POP))
         elif isinstance(st, A.If):
             self._emit_if(st, layout, ctx)
+        elif isinstance(st, A.Match):
+            self._emit_match(st, layout, ctx)
         elif isinstance(st, A.While):
             self._emit_while(st, layout, ctx)
         elif isinstance(st, A.For):
@@ -672,6 +680,8 @@ class CodeGenVM:
                 raise CodegenError(
                     f"[{e.line}:{e.col}] Unsupported literal {e.value!r}"
                 )
+        elif isinstance(e, A.Identifier) and id(e) in ctx.variant_ctor:
+            self._emit_variant(e, [], layout, ctx)
         elif isinstance(e, A.Identifier):
             slot = self._slot(e, layout, ctx)
             if slot.is_array:
@@ -723,6 +733,8 @@ class CodeGenVM:
                 fld.offset))
         elif isinstance(e, A.StructLit):
             self._emit_struct_lit(e, layout, ctx)
+        elif isinstance(e, A.Call) and id(e) in ctx.variant_ctor:
+            self._emit_variant(e, e.args, layout, ctx)
         elif isinstance(e, A.Call):
             self._emit_call(e, layout, ctx)
         else:
@@ -764,6 +776,92 @@ class CodeGenVM:
             self.code.append(Instruction(
                 OpCode.HEAP_STORE_FIELD_F if fld.type == Float else OpCode.HEAP_STORE_FIELD,
                 fld.offset))
+
+    def _emit_variant(self, e: A.Expr, args, layout: FunctionLayout, ctx: Context):
+        """Build a variant. Structurally a struct literal with positional
+        fields, except that a variant carrying nothing is a constant: there is
+        one instance of it for the whole run, so it is loaded rather than
+        allocated."""
+        variant = ctx.variant_ctor[id(e)]
+        if not variant.fields:
+            self.code.append(Instruction(OpCode.LOAD_VARIANT, variant.type_id))
+            return
+        # As in _emit_struct_lit, the address stays on the stack and each field
+        # store consumes a copy, so it is the value of the whole expression.
+        self.code.append(Instruction(OpCode.ALLOC_TYPED, variant.type_id))
+        for arg, fld in zip(args, variant.fields):
+            self.code.append(Instruction(OpCode.DUP))
+            self._emit_expr(arg, layout, ctx)
+            self.code.append(Instruction(
+                OpCode.HEAP_STORE_FIELD_F if fld.type == Float else OpCode.HEAP_STORE_FIELD,
+                fld.offset))
+
+    def _emit_match(self, st: A.Match, layout: FunctionLayout, ctx: Context):
+        """Lower a match to a compare-and-jump chain on the subject's tag.
+
+        No indexed-jump opcode: an enum has a handful of variants, so a chain
+        costs a couple of compares and keeps the instruction set — and anything
+        that ever serialises it — smaller.
+
+        The subject and its tag sit on the operand stack for the length of the
+        chain. Every path leaves it empty: a matching arm pops both before its
+        body runs, and the chain's own fall-through pops them too. The subject
+        stays tagged as a reference throughout, so a collection during the
+        match still sees it.
+        """
+        self._emit_expr(st.subject, layout, ctx)
+        self.code.append(Instruction(OpCode.DUP))
+        self.code.append(Instruction(OpCode.TAG_OF))
+
+        end_jumps: List[int] = []
+        catch_all = None
+        for arm in st.arms:
+            variant = ctx.arm_variant.get(id(arm))
+            if variant is None:
+                catch_all = arm
+                continue
+            self.code.append(Instruction(OpCode.DUP))
+            self.code.append(Instruction(OpCode.PUSH_INT, variant.type_id))
+            self.code.append(Instruction(OpCode.CMP_EQ))
+            jz_index = len(self.code)
+            self.code.append(Instruction(OpCode.JZ, 0))  # patched to the next arm
+
+            self.code.append(Instruction(OpCode.POP))    # the tag; the ref remains
+            self._bind_payload(arm, variant, layout, ctx)
+            self.code.append(Instruction(OpCode.POP))    # the ref
+            self._emit_scoped_block(arm.body, layout, ctx)
+            end_jumps.append(len(self.code))
+            self.code.append(Instruction(OpCode.JMP, 0))
+
+            self.code[jz_index].arg = len(self.code)
+
+        # Nothing matched. Unreachable when every variant is named -- sema
+        # requires coverage -- but the stack has to balance on this path too.
+        self.code.append(Instruction(OpCode.POP))
+        self.code.append(Instruction(OpCode.POP))
+        if catch_all is not None:
+            self._emit_scoped_block(catch_all.body, layout, ctx)
+        for index in end_jumps:
+            self.code[index].arg = len(self.code)
+
+    def _bind_payload(self, arm: A.MatchArm, variant, layout: FunctionLayout,
+                      ctx: Context):
+        """Copy an arm's payload into the slots its bindings named. The subject
+        is on top of the stack and stays there."""
+        for sym, fld in zip(ctx.arm_bindings.get(id(arm), ()), variant.fields):
+            slot = layout.slots.get(sym)
+            if slot is None:
+                raise CodegenError(
+                    f"[{arm.line}:{arm.col}] No slot for binding '{sym.name}'"
+                )
+            self.code.append(Instruction(OpCode.DUP))
+            is_float = fld.type == Float
+            self.code.append(Instruction(
+                OpCode.HEAP_LOAD_FIELD_F if is_float else OpCode.HEAP_LOAD_FIELD,
+                fld.offset))
+            self.code.append(Instruction(
+                OpCode.STORE_LOCAL_F if is_float else OpCode.STORE_LOCAL,
+                slot.index))
 
     def _emit_binary(self, e: A.Binary, layout: FunctionLayout, ctx: Context):
         if e.op == '&&':

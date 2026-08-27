@@ -89,6 +89,8 @@ FROZEN = {
     "HEAP_STORE_FIELD_F": 71,
     "GC": 72,
     "PANIC": 73,
+    "TAG_OF": 74,
+    "LOAD_VARIANT": 75,
 }
 
 # Numbers of opcodes that once existed and were removed. A retired number is

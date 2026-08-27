@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from . import ast as A
 from .compiler_types import (
     Type, Int, Str, Float, Void, Bool, Ptr, HeapPtr, Null, StructInfo, StructField,
+    EnumInfo, VariantInfo, is_enum_type,
     type_from_name, is_array_type, array_length, is_struct_type, is_reference_type,
     assignable, comparable, word_count, BUILTIN_TYPES, UnknownTypeError,
 )
@@ -137,6 +138,20 @@ class Context:
         # the table the VM carries, which is also what a collector needs to
         # learn an object's size and which of its fields are references.
         self.structs: Dict[str, StructInfo] = {}
+        # Enum name -> its variants. An enum has no heap type id of its own:
+        # there is never an object of type Result, only an Ok or an Err.
+        self.enums: Dict[str, EnumInfo] = {}
+        # Variant name -> its layout. Flat because variant names are global,
+        # which is what lets `Ok(5)` be written without naming its enum. Their
+        # type ids share a space with struct ids, since the collector indexes
+        # one table by them.
+        self.variants: Dict[str, VariantInfo] = {}
+        # id(Call | Identifier) -> the variant that expression constructs.
+        self.variant_ctor: Dict[int, VariantInfo] = {}
+        # id(MatchArm) -> the variant it matches; absent for the '_' arm.
+        self.arm_variant: Dict[int, VariantInfo] = {}
+        # id(MatchArm) -> the symbols its bindings declare, in payload order.
+        self.arm_bindings: Dict[int, List[Symbol]] = {}
         self.node_type: Dict[int, Type] = {}
         # id(Identifier | VarDecl | Param) -> the Symbol it refers to or declares.
         self.binding: Dict[int, Symbol] = {}
@@ -183,7 +198,7 @@ class SemanticAnalyzer:
     def _resolve_type(self, name: str, line: int, col: int) -> Type:
         """Map a source-level type name onto a concrete Type, with location on failure."""
         try:
-            return type_from_name(name, self.ctx.structs)
+            return type_from_name(name, self.ctx.structs, self.ctx.enums)
         except UnknownTypeError as e:
             raise SemanticError(str(e), line, col)
 
@@ -236,9 +251,89 @@ class SemanticAnalyzer:
                 offset += word_count(ft)
             info.fields = fields
 
+    def _next_type_id(self) -> int:
+        """Structs and variants draw from one space: the collector indexes a
+        single table by type id, and a variant is an object in it like any
+        struct."""
+        return len(self.ctx.structs) + len(self.ctx.variants)
+
+    def _register_enums(self, program: A.Program):
+        """Resolve enum declarations in two phases, as structs are.
+
+        Every variant name is registered before any payload type is resolved,
+        so a variant may carry its own enum and `enum List { Nil, Cons(int,
+        List) }` is expressible.
+        """
+        for ed in program.enums:
+            if ed.name in self.ctx.enums:
+                raise SemanticError(f"Redefinition of enum '{ed.name}'", ed.line, ed.col)
+            if ed.name in self.ctx.structs:
+                raise SemanticError(
+                    f"Enum '{ed.name}' clashes with the struct of the same name",
+                    ed.line, ed.col,
+                )
+            if ed.name in BUILTIN_TYPES:
+                raise SemanticError(
+                    f"Enum '{ed.name}' shadows the built-in type '{ed.name}'",
+                    ed.line, ed.col,
+                )
+            if not ed.variants:
+                raise SemanticError(
+                    f"Enum '{ed.name}' must declare at least one variant", ed.line, ed.col
+                )
+            info = EnumInfo(ed.name)
+            self.ctx.enums[ed.name] = info
+            for index, vd in enumerate(ed.variants):
+                if vd.name in self.ctx.variants:
+                    owner = self.ctx.variants[vd.name].enum_name
+                    raise SemanticError(
+                        f"Variant '{vd.name}' is already declared by enum "
+                        f"'{owner}'; variant names are global",
+                        vd.line, vd.col,
+                    )
+                if vd.name in self.ctx.structs or vd.name in self.ctx.enums:
+                    raise SemanticError(
+                        f"Variant '{vd.name}' clashes with the type of the same name",
+                        vd.line, vd.col,
+                    )
+                if vd.name in BUILTIN_TYPES:
+                    raise SemanticError(
+                        f"Variant '{vd.name}' shadows the built-in type '{vd.name}'",
+                        vd.line, vd.col,
+                    )
+                variant = VariantInfo(vd.name, type_id=self._next_type_id(),
+                                      enum_name=ed.name, index=index)
+                self.ctx.variants[vd.name] = variant
+                info.variants.append(variant)
+
+        for ed in program.enums:
+            for vd in ed.variants:
+                variant = self.ctx.variants[vd.name]
+                fields: List[StructField] = []
+                offset = 0
+                for position, type_name in enumerate(vd.payload):
+                    ft = self._resolve_type(type_name, vd.line, vd.col)
+                    if is_array_type(ft):
+                        raise SemanticError(
+                            f"Variant '{vd.name}' cannot carry an array; arrays live "
+                            f"in a frame, not in a heap object",
+                            vd.line, vd.col,
+                        )
+                    if ft == Void:
+                        raise SemanticError(
+                            f"Variant '{vd.name}' cannot carry a void value",
+                            vd.line, vd.col,
+                        )
+                    # Payloads are positional, so the fields are named by
+                    # position. Nothing in the language can write these names.
+                    fields.append(StructField(f"_{position}", ft, offset))
+                    offset += word_count(ft)
+                variant.fields = fields
+
     def analyze(self, program: A.Program) -> Context:
         # Structs first: function signatures may mention struct types.
         self._register_structs(program)
+        self._register_enums(program)
 
         for name, (param_names, ret_name) in get_builtins().items():
             if name in self.ctx.functions:
@@ -264,6 +359,13 @@ class SemanticAnalyzer:
                 raise SemanticError(f"Function '{fn.name}' cannot return an array type", fn.line, fn.col)
             if fn.name in self.ctx.functions:
                 raise SemanticError(f"Redefinition of function '{fn.name}'", fn.line, fn.col)
+            if fn.name in self.ctx.variants:
+                # `Ok(5)` has to mean one thing.
+                raise SemanticError(
+                    f"Function '{fn.name}' has the same name as a variant of enum "
+                    f"'{self.ctx.variants[fn.name].enum_name}'",
+                    fn.line, fn.col,
+                )
             self.ctx.functions[fn.name] = FunctionSig(fn.name, param_types, ret_type)
 
         self._check_entry_point(program)
@@ -402,6 +504,8 @@ class SemanticAnalyzer:
                 for s in st.else_block:
                     self._analyze_stmt(s, else_scope, ret_type)
                 self._record_scope_refs(st.else_block, else_scope)
+        elif isinstance(st, A.Match):
+            self._analyze_match(st, scope, ret_type)
         elif isinstance(st, A.While):
             cond_t = self._analyze_expr(st.cond, scope)
             if cond_t != Bool:
@@ -464,6 +568,128 @@ class SemanticAnalyzer:
         if refs:
             self.ctx.scope_refs[id(key)] = refs
 
+    def _analyze_match(self, st: A.Match, scope: Scope, ret_type: Type):
+        """Check a match: an enum subject, arms naming its variants, and
+        coverage of every one of them.
+
+        A match is total by construction -- either every variant is named or
+        `_` stands for the rest -- so nothing falls through it. What a match
+        cannot promise is that the subject is a variant at all: an enum
+        reference may be null, and that faults at run time exactly as reading
+        a field of a null struct does.
+        """
+        subject_t = self._analyze_expr(st.subject, scope)
+        if not is_enum_type(subject_t):
+            raise SemanticError(
+                f"match requires an enum, got {subject_t}", st.line, st.col
+            )
+        info = self.ctx.enums[subject_t.name]
+
+        covered: Dict[str, bool] = {}
+        catch_all: Optional[A.MatchArm] = None
+        for arm in st.arms:
+            if catch_all is not None:
+                where = "'_'" if arm.variant is None else f"'{arm.variant}'"
+                raise SemanticError(
+                    f"Arm {where} comes after '_', so it can never match",
+                    arm.line, arm.col,
+                )
+            variant = None
+            if arm.variant is None:
+                catch_all = arm
+            else:
+                variant = info.variant_named(arm.variant)
+                if variant is None:
+                    owner = self.ctx.variants.get(arm.variant)
+                    hint = (f"; '{arm.variant}' belongs to enum '{owner.enum_name}'"
+                            if owner else "")
+                    raise SemanticError(
+                        f"Enum '{info.name}' has no variant '{arm.variant}'{hint}",
+                        arm.line, arm.col,
+                    )
+                if arm.variant in covered:
+                    raise SemanticError(
+                        f"Variant '{arm.variant}' is matched twice", arm.line, arm.col
+                    )
+                if len(arm.bindings) != len(variant.fields):
+                    carries = (f"{len(variant.fields)} value(s)" if variant.fields
+                               else "no payload")
+                    raise SemanticError(
+                        f"Variant '{variant.name}' carries {carries}, but the arm "
+                        f"binds {len(arm.bindings)} name(s)",
+                        arm.line, arm.col,
+                    )
+                covered[arm.variant] = True
+                self.ctx.arm_variant[id(arm)] = variant
+
+            # An arm is a scope, like an if block. Its bindings are ordinary
+            # frame slots, so a reference bound here stops rooting its object
+            # when the arm ends.
+            arm_scope = Scope(scope)
+            bound: List[Symbol] = []
+            if variant is not None:
+                for name, fld in zip(arm.bindings, variant.fields):
+                    sym = arm_scope.define(Symbol(name, fld.type), arm.line, arm.col)
+                    self._frame.append(sym)
+                    bound.append(sym)
+            self.ctx.arm_bindings[id(arm)] = bound
+
+            for inner in arm.body:
+                self._analyze_stmt(inner, arm_scope, ret_type)
+            self._record_scope_refs(arm.body, arm_scope)
+
+        missing = [v.name for v in info.variants if v.name not in covered]
+        if catch_all is None and missing:
+            raise SemanticError(
+                f"match on '{info.name}' does not cover: {', '.join(missing)}",
+                st.line, st.col,
+            )
+        if catch_all is not None and not missing:
+            # Every variant is already named, so the catch-all is dead. Worth
+            # saying: it is the arm that would silently absorb a variant added
+            # later, which is the coverage this check exists to give.
+            self.ctx.warnings.append(Diagnostic(
+                f"'_' covers no remaining variant of '{info.name}'",
+                catch_all.line, catch_all.col,
+            ))
+
+    def _analyze_variant_construction(self, e: A.Expr, name: str, args: List[A.Expr],
+                                      scope: Scope) -> Type:
+        """Type `Ok(5)` or a bare `Pending`.
+
+        The result is the *enum's* type, not the variant's. A variant is not a
+        type anyone can write down -- there is no `let x: Ok;` -- so nothing
+        needs the narrower one, and typing it this way means assignability
+        needs no special case at all.
+        """
+        variant = self.ctx.variants[name]
+        if isinstance(e, A.Call) and not variant.fields:
+            # The declaration already refuses `A()`, so the use site refuses
+            # `A()` too: one value, one spelling, at both ends.
+            raise SemanticError(
+                f"Variant '{name}' carries no payload; "
+                f"write '{name}' without parentheses",
+                e.line, e.col,
+            )
+        if len(args) != len(variant.fields):
+            carries = (f"{len(variant.fields)} value(s)" if variant.fields
+                       else "no payload")
+            raise SemanticError(
+                f"Variant '{name}' carries {carries}, got {len(args)}", e.line, e.col
+            )
+        for position, (arg, fld) in enumerate(zip(args, variant.fields)):
+            at = self._analyze_expr(arg, scope)
+            if not assignable(fld.type, at):
+                raise SemanticError(
+                    f"Variant '{name}' expects {fld.type} at position {position}, "
+                    f"got {at}",
+                    arg.line, arg.col,
+                )
+        self.ctx.variant_ctor[id(e)] = variant
+        t = self.ctx.enums[variant.enum_name].type()
+        self.ctx.set_type(e, t)
+        return t
+
     def _check_exit_code(self, value: A.Expr):
         """Warn when main returns a constant the exit code cannot represent, so
         that `return 256` does not quietly exit 0 and read as success.
@@ -500,6 +726,13 @@ class SemanticAnalyzer:
                 return then_always and else_always
             else:
                 return False
+        if isinstance(st, A.Match):
+            # Sema requires a match to be total, so if every arm returns then
+            # nothing can continue past it.
+            return all(
+                any(self._always_returns(s, scope, ret_type) for s in arm.body)
+                for arm in st.arms
+            )
         if isinstance(st, (A.While, A.For)):
             # A loop body may not run, so it never guarantees a return. An
             # unconditional loop that only exits by 'return' is rejected too;
@@ -575,6 +808,17 @@ class SemanticAnalyzer:
         if isinstance(e, A.Identifier):
             sym = scope.resolve(e.name)
             if sym is None:
+                # A variant with no payload is a value, not a call: `Pending`
+                # rather than `Pending()`. A local of the same name shadows it,
+                # which is why this is reached only when nothing resolved.
+                if e.name in self.ctx.variants:
+                    if self.ctx.variants[e.name].fields:
+                        raise SemanticError(
+                            f"Variant '{e.name}' carries a payload; "
+                            f"write '{e.name}(...)'",
+                            e.line, e.col,
+                        )
+                    return self._analyze_variant_construction(e, e.name, [], scope)
                 raise SemanticError(f"Undeclared variable '{e.name}'", e.line, e.col)
             self.ctx.bind(e, sym)
             self.ctx.set_type(e, sym.type)
@@ -836,6 +1080,8 @@ class SemanticAnalyzer:
                 self._check_const_length(arr_t, e.args[1], "array_pop", -1, e.line, e.col)
                 self.ctx.set_type(e, Int)
                 return Int
+            if e.callee in self.ctx.variants:
+                return self._analyze_variant_construction(e, e.callee, e.args, scope)
             if e.callee not in self.ctx.functions:
                 raise SemanticError(f"Call to undeclared function '{e.callee}'", e.line, e.col)
             sig = self.ctx.functions[e.callee]

@@ -30,6 +30,11 @@ class ImportResolver:
         self.function_origins: Dict[str, Path] = {}
         self.all_structs: List[A.StructDef] = []
         self.struct_origins: Dict[str, Path] = {}
+        self.all_enums: List[A.EnumDef] = []
+        self.enum_origins: Dict[str, Path] = {}
+        # Variant names are global, like struct and function names, so a
+        # collision between two files has to name both of them.
+        self.variant_origins: Dict[str, Path] = {}
 
     def resolve(self, entry_file: Path) -> ResolvedProgram:
         self.included.clear()
@@ -38,11 +43,14 @@ class ImportResolver:
         self.function_origins.clear()
         self.all_structs.clear()
         self.struct_origins.clear()
+        self.all_enums.clear()
+        self.enum_origins.clear()
+        self.variant_origins.clear()
 
         self._resolve_file(entry_file.resolve())
 
         merged = A.Program(includes=[], functions=self.all_functions,
-                           structs=self.all_structs)
+                           structs=self.all_structs, enums=self.all_enums)
         return ResolvedProgram(program=merged, source_files=self.source_files)
 
     def _resolve_file(self, file_path: Path) -> None:
@@ -80,8 +88,36 @@ class ImportResolver:
                     f"Redefinition of struct '{sd.name}' in {file_path} "
                     f"(previously defined in {orig})"
                 )
+            if sd.name in self.enum_origins:
+                raise ResolveError(
+                    f"Struct '{sd.name}' in {file_path} clashes with the enum of "
+                    f"the same name in {self.enum_origins[sd.name]}"
+                )
             self.struct_origins[sd.name] = file_path
             self.all_structs.append(sd)
+
+        for ed in program.enums:
+            if ed.name in self.enum_origins:
+                orig = self.enum_origins[ed.name]
+                raise ResolveError(
+                    f"Redefinition of enum '{ed.name}' in {file_path} "
+                    f"(previously defined in {orig})"
+                )
+            if ed.name in self.struct_origins:
+                raise ResolveError(
+                    f"Enum '{ed.name}' in {file_path} clashes with the struct of "
+                    f"the same name in {self.struct_origins[ed.name]}"
+                )
+            self.enum_origins[ed.name] = file_path
+            for v in ed.variants:
+                if v.name in self.variant_origins:
+                    orig = self.variant_origins[v.name]
+                    raise ResolveError(
+                        f"Variant '{v.name}' of enum '{ed.name}' in {file_path} "
+                        f"is already declared in {orig}; variant names are global"
+                    )
+                self.variant_origins[v.name] = file_path
+            self.all_enums.append(ed)
 
         for fn in program.functions:
             if fn.name in self.function_origins:
