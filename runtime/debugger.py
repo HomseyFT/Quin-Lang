@@ -49,6 +49,15 @@ class Quit(Exception):
     so the program does not finish and has no exit value."""
 
 
+class ResumeNotChosen(RuntimeError):
+    """A front end returned from on_stop without saying how to resume.
+
+    Its own bug, not the debugged program's, which is why it is not a
+    DebuggerError: nothing the user typed can cause it and no front end should
+    catch it.
+    """
+
+
 class Mode(Enum):
     """What the hook should do at the next instruction."""
     RUN = auto()        # only breakpoints stop us
@@ -110,17 +119,27 @@ class Debugger:
         self.source_map: SourceMap = program.source_map
         self.functions = program.functions
         self.structs = program.structs
-        self.on_stop = on_stop or (lambda dbg, vm, stop: None)
+        self.on_stop = on_stop or self._run_to_completion
 
         self.breakpoints: Dict[int, Breakpoint] = {}
         self._by_pc: Dict[int, Breakpoint] = {}
         self._next_id = 1
 
-        self._mode = Mode.ENTRY
+        self._mode: Optional[Mode] = Mode.ENTRY
         self._from_line: Optional[int] = None
         self._from_depth = 0
 
         self._ranges = self._function_ranges()
+
+    @staticmethod
+    def _run_to_completion(dbg: "Debugger", vm: QuinVM, stop: "Stop") -> None:
+        """The default front end: no one is watching, so keep going.
+
+        Spelled out rather than left as a no-op, because a callback that
+        returns without choosing is now an error -- and it should be, since
+        every other caller has a real decision to make here.
+        """
+        dbg.resume(Mode.RUN, vm)
 
     # -- program layout --------------------------------------------------
 
@@ -285,10 +304,22 @@ class Debugger:
             self._stop(vm, Stop(StopReason.STEP, self.frames(vm)[0]))
 
     def _stop(self, vm: QuinVM, stop: Stop) -> None:
-        # RUN by default: a front end that returns without choosing continues,
-        # rather than stopping again at the very next instruction.
-        self._mode = Mode.RUN
+        """Hand control to the front end, which must choose what happens next.
+
+        The mode is cleared before the callback and checked after it, so a
+        front end that returns without choosing gets an error instead of a
+        silent continue. Defaulting to RUN reads as harmless and is not: a
+        `step` that quietly became a `continue` looks like a breakpoint that
+        failed to fire, and the further the front end is from the VM -- another
+        thread, another process -- the harder that is to see.
+        """
+        self._mode = None
         self.on_stop(self, vm, stop)
+        if self._mode is None:
+            raise ResumeNotChosen(
+                "on_stop returned without calling Debugger.resume(); "
+                "the debugger cannot guess whether to step or continue"
+            )
 
     # -- inspection ------------------------------------------------------
 

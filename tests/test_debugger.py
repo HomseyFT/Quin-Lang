@@ -15,7 +15,13 @@ the blank one the triple-quoted string opens with.
 import unittest
 
 from compiler.bytecode import SourceMapBuilder
-from runtime.debugger import Debugger, DebuggerError, Mode, StopReason
+from runtime.debugger import (
+    Debugger,
+    DebuggerError,
+    Mode,
+    ResumeNotChosen,
+    StopReason,
+)
 from runtime.vm import VMError
 from tests.harness import (
     QuinTestCase,
@@ -494,6 +500,59 @@ class TestHookIsOffByDefault(QuinTestCase):
         with redirect_stdout(io.StringIO()):
             Debugger(program).run(vm)
         self.assertIsNone(vm.hook, "a later plain run must not pay for it")
+
+
+class TestResumeContract(QuinTestCase):
+    """A front end must say how to resume. This is the failure mode that is
+    hardest to see from a distance: a step that silently became a continue
+    looks like a breakpoint that did not fire."""
+
+    # Several lines, so a step actually produces a second stop to forget at.
+    SRC = "fn main(): int {\n    let a: int = 1;\n    let b: int = 2;\n    return a + b;\n}"
+
+    def run_with(self, on_stop):
+        import io
+        from contextlib import redirect_stdout
+        program = compile_source(self.SRC)
+        dbg = Debugger(program, on_stop)
+        with redirect_stdout(io.StringIO()):
+            return dbg.run(vm_for(program))
+
+    def test_returning_without_choosing_is_an_error(self):
+        with self.assertRaises(ResumeNotChosen):
+            self.run_with(lambda dbg, vm, stop: None)
+
+    def test_the_error_says_what_to_call(self):
+        with self.assertRaises(ResumeNotChosen) as caught:
+            self.run_with(lambda dbg, vm, stop: None)
+        self.assertIn("Debugger.resume()", str(caught.exception))
+
+    def test_choosing_explicitly_is_fine(self):
+        self.assertEqual(self.run_with(lambda dbg, vm, stop: dbg.resume(Mode.RUN, vm)), 3)
+
+    def test_no_front_end_runs_to_completion(self):
+        # The default is not a no-op: it chooses RUN, so "nobody chose" stays
+        # an error rather than being the ordinary case.
+        import io
+        from contextlib import redirect_stdout
+        program = compile_source(self.SRC)
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(Debugger(program).run(vm_for(program)), 3)
+
+    def test_a_front_end_that_stops_choosing_partway_is_caught(self):
+        # The realistic shape of the bug: a handler that chooses on some stops
+        # and falls through on others.
+        seen = []
+
+        def on_stop(dbg, vm, stop):
+            seen.append(stop.reason)
+            if len(seen) == 1:
+                dbg.resume(Mode.STEP_IN, vm)
+            # second stop: forgets, which must not become a continue
+
+        with self.assertRaises(ResumeNotChosen):
+            self.run_with(on_stop)
+        self.assertEqual(len(seen), 2, "it failed at the stop that forgot, not before")
 
 
 class TestFrontEnd(QuinTestCase):

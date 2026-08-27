@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-873 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+878 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -771,6 +771,8 @@ Values are shown as the language defines them, not as raw words: a negative `int
 The loop reads `hook` **once into a local** before it starts, not per instruction. Read per instruction it costs a measurable ~3%; hoisted it is under 1%, which is inside the run-to-run noise. The trade is that a hook must be attached before `run_main` and cannot be swapped mid-run, which is all a debugger needs. `tests/test_debugger.py` pins that, so anyone who moves the read back into the loop gets a failing test rather than a silent 3%.
 
 The split is deliberate: `runtime/debugger.py` holds the state machine and does no I/O, `compiler/debug.py` holds the terminal session. That is what lets the tests drive the whole thing with a list of commands instead of a terminal.
+
+A front end **must** say how to resume before returning from `on_stop`; forgetting raises `ResumeNotChosen` rather than defaulting to continue. Defaulting reads as harmless and is not — a `step` that quietly became a `continue` looks like a breakpoint that failed to fire, and the further the front end sits from the VM, the harder that is to see.
 
 A fault stops one last time before it propagates. The VM does not unwind its own frames when it raises, so the entire call stack is still there to inspect at the moment the information is most wanted:
 
