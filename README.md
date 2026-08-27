@@ -86,7 +86,7 @@ Nothing reserves `2` and `3` from a program, so `return 3` still exits 3. Errors
 python3 -m unittest discover -s tests -t .
 ```
 
-865 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
+873 tests covering the lexer, parser, resolver, type checker, code generator, and VM. They run in about three seconds, so there's no reason not to run them on every change. See [Tests](#tests) for the layout.
 
 ---
 
@@ -376,15 +376,15 @@ enum Result {
 }
 
 fn checked_div(a: int, b: int): Result {
-    if (b == 0) { return DivideByZero; }
-    return Ok(a / b);
+    if (b == 0) { return Result::DivideByZero; }
+    return Result::Ok(a / b);
 }
 
 fn main(): int {
     match (checked_div(10, 0)) {
-        Ok(value)     => { println(value); }
-        DivideByZero  => { println("divided by zero"); }
-        NotADigit(c)  => { println(c); }
+        Result::Ok(value)    => { println(value); }
+        Result::DivideByZero => { println("divided by zero"); }
+        Result::NotADigit(c) => { println(c); }
     }
     return 0;
 }
@@ -392,11 +392,17 @@ fn main(): int {
 
 This is what lets a library report a failure without stopping the program. `panic` is still there for a broken invariant, but "the caller gave me a zero" is not that — it is an outcome, and now it can be returned as one. Because the failure is in the type, the caller cannot read the answer without first saying what happens when there isn't one.
 
-- Payloads are **positional**: `Ok(int)` declares one, `Ok(5)` builds it, `Ok(v)` binds it.
-- A variant carrying nothing is written bare: `DivideByZero`, never `DivideByZero()`. The declaration refuses `A()` for the same reason — one value, one spelling.
-- **Variant names are global**, like struct and function names, which is what lets `Ok(5)` be written without naming its enum. The cost is that two enums cannot share a variant name; the collision is reported at compile time and names the enum that claimed it first.
+- Payloads are **positional**: `Ok(int)` declares one, `Result::Ok(5)` builds it, `Result::Ok(v)` binds it.
+- A variant carrying nothing is written bare: `Result::DivideByZero`, never `Result::DivideByZero()`. The declaration refuses `A()` for the same reason — one value, one spelling.
+- **A variant is always written `Enum::Variant`.** Only the declaration uses the short name, where the enum is already named by the line above it. Qualifying makes a variant impossible to confuse with a variable, a function, or another enum's variant of the same name, and it is why two enums may both declare `Ok` — and why `std/` could declare enums without claiming names for every program that includes it.
 - The subject of a match is parenthesised, as an `if` condition is. Not only for consistency: `match r {` is ambiguous, because an identifier followed by a brace is how a struct literal begins, so the subject would swallow the arms.
 - A match must be exhaustive. `_` covers the rest, and warns if there is no rest to cover — that arm is the one that would silently absorb a variant added later.
+
+A short name on its own is a compile error that names the spelling to use, so the fix is always in the message:
+
+```
+Semantic error: [3:22] 'Ok' is a variant name; write 'Result::Ok'
+```
 
 ```
 Semantic error: [7:5] match on 'Result' does not cover: DivideByZero, NotADigit
@@ -938,7 +944,7 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
 - The process exit code carries only the low byte of `main`'s return value. Compile and runtime errors use 2 and 3, which a program may also return; stderr is the unambiguous signal.
 
-- Variant names share one global namespace, so two enums cannot both declare `Ok`. That is the price of writing `Ok(5)` instead of `Result::Ok(5)`, and it is why `std/` declares no enums: doing so would claim those names for every program that includes it.
+- A variant must always be written `Enum::Variant`; there is no `use` to shorten it, and no inference of the enum from a match subject. Every use says which enum it belongs to.
 - A match is a statement, not an expression. `let x = match (r) { ... }` is not a thing; an arm assigns or returns instead.
 - `print` takes a variable name, not an expression. A `struct` already shows its fields, so `print p` covers most of what `print p.x` would.
 - A shadowed name shows every declaration rather than the live one. The slot table carries no scope ranges, so which is in scope at a given pc is not knowable from it; showing all of them is honest where a guess would be confidently wrong.

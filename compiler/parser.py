@@ -194,11 +194,35 @@ class Parser:
             raise ParseError("A match needs at least one arm", kw_tok.line, kw_tok.col)
         return A.Match(subject, arms, line=kw_tok.line, col=kw_tok.col)
 
+    def _qualified(self, first) -> str:
+        """`Enum::Variant`, given the token for `Enum`.
+
+        Returned as a single dotted-style name rather than a node of its own:
+        nothing else in the language nests, so `A::B::C` is a syntax error
+        rather than a namespace path.
+        """
+        self._consume(TokenType.COLON_COLON, "Expected '::'")
+        second = self._consume(TokenType.IDENTIFIER, "Expected a variant name after '::'")
+        if self._check(TokenType.COLON_COLON):
+            tok = self._peek()
+            raise ParseError(
+                f"'{first.lexeme}::{second.lexeme}::' is not a path; a variant is "
+                f"named by its enum and nothing further",
+                tok.line, tok.col,
+            )
+        return f"{first.lexeme}::{second.lexeme}"
+
     def _match_arm(self) -> A.MatchArm:
         tok = self._consume(TokenType.IDENTIFIER, "Expected a variant name or '_'")
         # `_` is an ordinary identifier everywhere else, so the catch-all is
         # recognised by name here rather than by a token of its own.
-        variant = None if tok.lexeme == "_" else tok.lexeme
+        if tok.lexeme == "_":
+            variant = None
+        else:
+            # Qualified in a pattern too. The subject's enum is known here, so
+            # the short form could be allowed, but then a name would mean one
+            # thing in an arm and another everywhere else.
+            variant = self._qualified(tok)
         bindings: List[str] = []
         if self._match(TokenType.LEFT_PAREN):
             if variant is None:
@@ -537,6 +561,10 @@ class Parser:
             return A.Literal(tok.literal, line=tok.line, col=tok.col)
         if self._match(TokenType.IDENTIFIER):
             tok = self._previous()
+            if self._check(TokenType.COLON_COLON):
+                # `Enum::Variant` is one name, so a call on it lands in _call
+                # as an ordinary Call and sema resolves it like any other.
+                return A.Identifier(self._qualified(tok), line=tok.line, col=tok.col)
             # `Name { ... }` is a struct literal. This is unambiguous because
             # every condition in the language is parenthesized, so an
             # identifier is never directly followed by a block.

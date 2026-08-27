@@ -32,9 +32,6 @@ class ImportResolver:
         self.struct_origins: Dict[str, Path] = {}
         self.all_enums: List[A.EnumDef] = []
         self.enum_origins: Dict[str, Path] = {}
-        # Variant names are global, like struct and function names, so a
-        # collision between two files has to name both of them.
-        self.variant_origins: Dict[str, Path] = {}
 
     def resolve(self, entry_file: Path) -> ResolvedProgram:
         self.included.clear()
@@ -45,7 +42,6 @@ class ImportResolver:
         self.struct_origins.clear()
         self.all_enums.clear()
         self.enum_origins.clear()
-        self.variant_origins.clear()
 
         self._resolve_file(entry_file.resolve())
 
@@ -109,14 +105,6 @@ class ImportResolver:
                     f"the same name in {self.struct_origins[ed.name]}"
                 )
             self.enum_origins[ed.name] = file_path
-            for v in ed.variants:
-                if v.name in self.variant_origins:
-                    orig = self.variant_origins[v.name]
-                    raise ResolveError(
-                        f"Variant '{v.name}' of enum '{ed.name}' in {file_path} "
-                        f"is already declared in {orig}; variant names are global"
-                    )
-                self.variant_origins[v.name] = file_path
             self.all_enums.append(ed)
 
         for fn in program.functions:

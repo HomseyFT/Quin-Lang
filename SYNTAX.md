@@ -403,18 +403,21 @@ enum Result {
 - Declared at the top level, like a struct, and visible across the whole merged program.
 - A variant's payload is **positional**: types, not `name: type` pairs.
 - A variant with no payload is written without parentheses. `A()` is a syntax error in a declaration and in a use — one value, one spelling.
-- Every enum needs at least one variant.
-- **Variant names are global.** Two enums cannot declare the same variant name, and a variant cannot share a name with a struct, an enum, a function, or a built-in type.
+- Every enum needs at least one variant, and no two variants of one enum may share a name.
+- The **declaration** uses short names; `enum E { E::A }` is a syntax error. Every **use** is qualified, `E::A`.
+- Two enums may declare the same short name, and a variant may share its short name with a struct, a function, or a variable — qualification keeps them distinct.
 - A variant may carry its own enum, so `enum List { Nil, Cons(int, List) }` is legal; names are registered before payload types are resolved.
 - A variant cannot carry an array or a `void`.
 
 ### Construction
 
 ```quin
-let a: Result = Ok(5);          // payload: a call
-let b: Result = DivideByZero;   // no payload: a bare name
-let c: Result = null;           // an enum reference is nullable
+let a: Result = Result::Ok(5);          // payload: a call
+let b: Result = Result::DivideByZero;   // no payload: a bare name
+let c: Result = null;                   // an enum reference is nullable
 ```
+
+`Enum::Variant` is one name, not a path: `A::B::C` is a syntax error. An unqualified variant name is a compile error naming the spelling to use, and an unknown enum is reported as such.
 
 A construction has the *enum's* type, not the variant's. There is no way to declare a variable of a variant type — `let x: Ok;` is not a thing.
 
@@ -422,15 +425,15 @@ A construction has the *enum's* type, not the variant's. There is no way to decl
 
 ```quin
 match (subject) {
-    Ok(value)     => { println(value); }
-    DivideByZero  => { println("divided by zero"); }
-    _             => { println("something else"); }
+    Result::Ok(value)    => { println(value); }
+    Result::DivideByZero => { println("divided by zero"); }
+    _                    => { println("something else"); }
 }
 ```
 
 - The subject is parenthesised, as in `if` and `while`. Required: `match r {` would parse as the struct literal `r { ... }`.
 - Arms are not comma-separated; each ends in a block.
-- The pattern is a variant name, optionally binding its payload positionally, or `_` for the rest.
+- The pattern is a qualified variant name, optionally binding its payload positionally, or `_` for the rest. Patterns are qualified like every other use: the subject's enum is known, but a name that means one thing in an arm and another everywhere else is worse than the repetition.
 - `_` may not bind, and no arm may follow it.
 - A variant may appear at most once.
 - The binding count must equal the payload count.

@@ -39,6 +39,7 @@ class TokenType(Enum):
     SHL = auto()
     SHR = auto()
     FAT_ARROW = auto()   # '=>', only in a match arm
+    COLON_COLON = auto() # '::', qualifying a variant with its enum
 
     # Literals
     IDENTIFIER = auto()

@@ -15,34 +15,34 @@ enum Result {
 
 fn checked_div(a: int, b: int): Result {
     if (b == 0) {
-        return DivideByZero;
+        return Result::DivideByZero;
     }
-    return Ok(a / b);
+    return Result::Ok(a / b);
 }
 
 // The second failure carries the offending character, which is the other
 // thing a sum type buys: a failure can say more than that it happened.
 fn digit_value(c: int): Result {
     if (c < 48) {
-        return NotADigit(c);
+        return Result::NotADigit(c);
     }
     if (c > 57) {
-        return NotADigit(c);
+        return Result::NotADigit(c);
     }
-    return Ok(c - 48);
+    return Result::Ok(c - 48);
 }
 
 fn report(label: str, r: Result): int {
     print(label);
     print(": ");
     match (r) {
-        Ok(value) => {
+        Result::Ok(value) => {
             println(value);
         }
-        DivideByZero => {
+        Result::DivideByZero => {
             println("divided by zero");
         }
-        NotADigit(c) => {
+        Result::NotADigit(c) => {
             print("'");
             print(char_to_str(c));
             println("' is not a digit");
@@ -51,7 +51,7 @@ fn report(label: str, r: Result): int {
     return 0;
 }
 
-// A variant carrying nothing is a constant: every `Nil` in a program is the
+// A variant carrying nothing is a constant: every `List::Nil` in a program is the
 // same object, so building a list allocates only the links that hold values.
 enum List {
     Nil,
@@ -60,10 +60,10 @@ enum List {
 
 fn sum(l: List): int {
     match (l) {
-        Nil => {
+        List::Nil => {
             return 0;
         }
-        Cons(head, rest) => {
+        List::Cons(head, rest) => {
             return head + sum(rest);
         }
     }
@@ -71,10 +71,10 @@ fn sum(l: List): int {
 
 fn length(l: List): int {
     match (l) {
-        Nil => {
+        List::Nil => {
             return 0;
         }
-        Cons(head, rest) => {
+        List::Cons(head, rest) => {
             return 1 + length(rest);
         }
     }
@@ -90,7 +90,7 @@ fn main(): int {
     // A match need not name every variant when `_` stands for the rest.
     let outcome: Result = checked_div(9, 0);
     match (outcome) {
-        Ok(value) => {
+        Result::Ok(value) => {
             println(value);
         }
         _ => {
@@ -98,7 +98,7 @@ fn main(): int {
         }
     }
 
-    let l: List = Cons(4, Cons(8, Cons(15, Nil)));
+    let l: List = List::Cons(4, List::Cons(8, List::Cons(15, List::Nil)));
     print("sum: ");
     println(sum(l));
     print("length: ");

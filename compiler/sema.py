@@ -284,31 +284,21 @@ class SemanticAnalyzer:
             info = EnumInfo(ed.name)
             self.ctx.enums[ed.name] = info
             for index, vd in enumerate(ed.variants):
-                if vd.name in self.ctx.variants:
-                    owner = self.ctx.variants[vd.name].enum_name
+                qualified = f"{ed.name}::{vd.name}"
+                if qualified in self.ctx.variants:
                     raise SemanticError(
-                        f"Variant '{vd.name}' is already declared by enum "
-                        f"'{owner}'; variant names are global",
+                        f"Enum '{ed.name}' declares '{vd.name}' twice",
                         vd.line, vd.col,
                     )
-                if vd.name in self.ctx.structs or vd.name in self.ctx.enums:
-                    raise SemanticError(
-                        f"Variant '{vd.name}' clashes with the type of the same name",
-                        vd.line, vd.col,
-                    )
-                if vd.name in BUILTIN_TYPES:
-                    raise SemanticError(
-                        f"Variant '{vd.name}' shadows the built-in type '{vd.name}'",
-                        vd.line, vd.col,
-                    )
-                variant = VariantInfo(vd.name, type_id=self._next_type_id(),
-                                      enum_name=ed.name, index=index)
-                self.ctx.variants[vd.name] = variant
+                variant = VariantInfo(qualified, type_id=self._next_type_id(),
+                                      enum_name=ed.name, short_name=vd.name,
+                                      index=index)
+                self.ctx.variants[qualified] = variant
                 info.variants.append(variant)
 
         for ed in program.enums:
             for vd in ed.variants:
-                variant = self.ctx.variants[vd.name]
+                variant = self.ctx.variants[f"{ed.name}::{vd.name}"]
                 fields: List[StructField] = []
                 offset = 0
                 for position, type_name in enumerate(vd.payload):
@@ -359,13 +349,6 @@ class SemanticAnalyzer:
                 raise SemanticError(f"Function '{fn.name}' cannot return an array type", fn.line, fn.col)
             if fn.name in self.ctx.functions:
                 raise SemanticError(f"Redefinition of function '{fn.name}'", fn.line, fn.col)
-            if fn.name in self.ctx.variants:
-                # `Ok(5)` has to mean one thing.
-                raise SemanticError(
-                    f"Function '{fn.name}' has the same name as a variant of enum "
-                    f"'{self.ctx.variants[fn.name].enum_name}'",
-                    fn.line, fn.col,
-                )
             self.ctx.functions[fn.name] = FunctionSig(fn.name, param_types, ret_type)
 
         self._check_entry_point(program)
@@ -600,11 +583,14 @@ class SemanticAnalyzer:
             else:
                 variant = info.variant_named(arm.variant)
                 if variant is None:
-                    owner = self.ctx.variants.get(arm.variant)
-                    hint = (f"; '{arm.variant}' belongs to enum '{owner.enum_name}'"
-                            if owner else "")
+                    if arm.variant in self.ctx.variants:
+                        raise SemanticError(
+                            f"'{arm.variant}' is not a variant of '{info.name}'",
+                            arm.line, arm.col,
+                        )
+                    self._reject_variant_name(arm, arm.variant)
                     raise SemanticError(
-                        f"Enum '{info.name}' has no variant '{arm.variant}'{hint}",
+                        f"Enum '{info.name}' has no variant '{arm.variant}'",
                         arm.line, arm.col,
                     )
                 if arm.variant in covered:
@@ -638,7 +624,9 @@ class SemanticAnalyzer:
                 self._analyze_stmt(inner, arm_scope, ret_type)
             self._record_scope_refs(arm.body, arm_scope)
 
-        missing = [v.name for v in info.variants if v.name not in covered]
+        # Short names: the message already says which enum, so qualifying each
+        # one would only repeat it.
+        missing = [v.short_name for v in info.variants if v.name not in covered]
         if catch_all is None and missing:
             raise SemanticError(
                 f"match on '{info.name}' does not cover: {', '.join(missing)}",
@@ -652,6 +640,29 @@ class SemanticAnalyzer:
                 f"'_' covers no remaining variant of '{info.name}'",
                 catch_all.line, catch_all.col,
             ))
+
+    def _reject_variant_name(self, e: A.Expr, name: str):
+        """Explain a name that looks like it was meant to be a variant.
+
+        The two ways to get one wrong are naming an enum that does not exist,
+        and leaving the enum off entirely -- which used to be how every variant
+        was written, so it is worth naming the fix rather than reporting an
+        undeclared variable.
+        """
+        if "::" in name:
+            enum_name = name.split("::", 1)[0]
+            if enum_name not in self.ctx.enums:
+                raise SemanticError(f"No enum named '{enum_name}'", e.line, e.col)
+            raise SemanticError(
+                f"Enum '{enum_name}' has no variant '{name.split('::', 1)[1]}'",
+                e.line, e.col,
+            )
+        owners = [v.name for v in self.ctx.variants.values() if v.short_name == name]
+        if owners:
+            spelled = " or ".join(f"'{o}'" for o in owners)
+            raise SemanticError(
+                f"'{name}' is a variant name; write {spelled}", e.line, e.col
+            )
 
     def _analyze_variant_construction(self, e: A.Expr, name: str, args: List[A.Expr],
                                       scope: Scope) -> Type:
@@ -819,6 +830,7 @@ class SemanticAnalyzer:
                             e.line, e.col,
                         )
                     return self._analyze_variant_construction(e, e.name, [], scope)
+                self._reject_variant_name(e, e.name)
                 raise SemanticError(f"Undeclared variable '{e.name}'", e.line, e.col)
             self.ctx.bind(e, sym)
             self.ctx.set_type(e, sym.type)
@@ -1083,6 +1095,7 @@ class SemanticAnalyzer:
             if e.callee in self.ctx.variants:
                 return self._analyze_variant_construction(e, e.callee, e.args, scope)
             if e.callee not in self.ctx.functions:
+                self._reject_variant_name(e, e.callee)
                 raise SemanticError(f"Call to undeclared function '{e.callee}'", e.line, e.col)
             sig = self.ctx.functions[e.callee]
             if len(e.args) != len(sig.params):

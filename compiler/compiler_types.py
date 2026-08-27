@@ -109,8 +109,14 @@ class EnumType(Type):
 class VariantInfo(StructInfo):
     """One variant's layout. A variant *is* a struct at runtime: same header,
     same type id, same field offsets, allocated and traced the same way. The
-    only additions are which enum it belongs to and where it sits in it."""
+    only additions are which enum it belongs to and where it sits in it.
+
+    `name` is the qualified spelling, `Result::Ok`, because that is how it is
+    written and how it should read back in a debugger. `short_name` is what
+    follows the `::`, which is the part that must be unique within its enum.
+    """
     enum_name: str = ""
+    short_name: str = ""
     index: int = 0
 
 
@@ -125,9 +131,10 @@ class EnumInfo:
     name: str
     variants: List[VariantInfo] = field(default_factory=list)
 
-    def variant_named(self, name: str) -> Optional[VariantInfo]:
+    def variant_named(self, qualified: str) -> Optional[VariantInfo]:
+        """Looked up by the qualified name, which is what a pattern carries."""
         for v in self.variants:
-            if v.name == name:
+            if v.name == qualified:
                 return v
         return None
 

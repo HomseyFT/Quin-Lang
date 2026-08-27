@@ -118,7 +118,8 @@ class Lexer:
                 self._add_token(TokenType.OR_OR); return
             self._add_token(TokenType.PIPE); return
         if c == ':':
-            self._add_token(TokenType.COLON); return
+            self._add_token(
+                TokenType.COLON_COLON if self._match(':') else TokenType.COLON); return
         if c == '&':
             # '&&' logical and, '&' address-of
             if self._match('&'):
