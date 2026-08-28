@@ -138,10 +138,11 @@ This is a quick tour; [SYNTAX.md](SYNTAX.md) is the reference.
 - `float` — 32-bit IEEE 754 single precision, about seven significant digits. The only type wider than a word: it occupies two slots wherever it is stored. `int` and `float` never mix implicitly. See [Floats](#floats).
 - `bool` — `true` / `false`. Not interchangeable with `int`: conditions must be `bool`, and `true + 1` is a type error.
 - `str` — a string: a heap object holding its length and its characters. Literals, concatenation, slicing and conversion all produce one, and the collector reclaims them. See [Strings](#strings).
-- `ptr` — an address in the current frame, produced by `&`.
+- `ptr` — an address in the current frame, produced by `@`.
 - `heapptr` — an address in the heap, produced by `alloc`.
 - `void` — no value; only valid as a return type.
 - `int[N]` — a fixed-size array of `N` ints in the current frame, for a literal `N > 0`.
+- `fn(T, ...): R` — a function taking those parameter types and returning `R`. See [Functions as values](#functions-as-values).
 - a `struct` name — a reference to a heap object. See [Structs](#structs).
 
 Arrays are deliberately second-class: they cannot be parameters, return types, initialized at declaration, assigned as a whole, or used as a value. They are zeroed at declaration and filled element by element.
@@ -163,6 +164,44 @@ fn main(): int {
     return 0;
 }
 ```
+
+### Functions as values
+
+A function's name, anywhere other than in a call, is a value naming that function:
+
+```quin
+fn add(a: int, b: int): int { return a + b; }
+fn mul(a: int, b: int): int { return a * b; }
+
+fn apply(f: fn(int, int): int, x: int, y: int): int {
+    return f(x, y);
+}
+
+fn main(): int {
+    println(apply(add, 2, 3));           // 5
+
+    let op: fn(int, int): int = mul;     // stored
+    println(op(2, 3));                   // 6
+    return 0;
+}
+```
+
+The type is written the way the declaration is, minus the parameter names: `fn(int, int): int`. Omitting `: R` means `void`, so `fn(str)` and `fn(str): void` are the same type. Function types nest, so `fn(fn(int): int): void` is a function taking a function.
+
+A function value is **one word holding an index into the program's function table** — not a heap address. It allocates nothing, the collector never traces one, and a `fn` field costs a struct exactly one slot. `std/list.ql` uses this for `list_map`, `list_filter` and `list_foreach`.
+
+**There is no capture.** A function value says *which function*, and nothing more; there is no environment attached. Capturing would mean a value carrying state, which would have to live on the heap and be traced like any other object — a different feature, with a different cost.
+
+Two things follow from `Call`'s callee being a name rather than an expression:
+
+```quin
+let f: fn(int, int): int = ops.apply;   // read the field into a variable first
+println(f(6, 7));                       // then call through it
+```
+
+A call names a variable or a function, so `ops.apply(6, 7)` and `pick()(6, 7)` are not written directly. A variable shadows a function of the same name here as everywhere else, so a local named `f` is what `f()` calls.
+
+Builtins are not function values. `println`, `alloc` and the rest are lowered to instructions at the call site and have no index to refer to, which the compiler says rather than calling them undeclared.
 
 ### Variables and statements
 
@@ -1052,6 +1091,7 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - `print` takes a variable name, not an expression. A `struct` already shows its fields, so `print p` covers most of what `print p.x` would.
 - A shadowed name shows every declaration rather than the live one. The slot table carries no scope ranges, so which is in scope at a given pc is not knowable from it; showing all of them is honest where a guess would be confidently wrong.
 - A breakpoint on a line with no code of its own moves forward to the next line that has some.
+- A function value carries no captured environment, and a call names a variable or a function rather than an arbitrary expression, so `table[i](x)` and `f()(x)` go through a local first.
 
 Future directions: scope ranges on the slot table, so a shadowed `print x` can name the live declaration; liveness analysis so a variable dead but still in scope stops rooting its object; and filling out `std/`.
 

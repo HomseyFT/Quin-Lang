@@ -74,6 +74,31 @@ The compiler warns when `main` returns a constant outside `0..255`, naming the e
 
 A compile error exits `2` and a runtime error exits `3`, so the tool's own failures are distinct from a program returning `1`. Nothing reserves those values from a program, though — stderr is the only certain signal, and a clean run leaves it empty.
 
+### Functions as values
+
+A function's name in any position other than a call is a value naming that function:
+
+```quin
+fn add(a: int, b: int): int { return a + b; }
+fn apply(f: fn(int, int): int, x: int, y: int): int { return f(x, y); }
+
+fn main(): int {
+    println(apply(add, 2, 3));         // 5
+    let op: fn(int, int): int = add;
+    println(op(4, 5));                 // 9
+    return 0;
+}
+```
+
+- The type is written `fn(T, ...): R`; the parameter names are not part of it. Omitting `: R` means `void`, so `fn(str)` and `fn(str): void` are one type.
+- Function types nest: `fn(fn(int): int): void`.
+- A function value is one word holding an index into the function table. It is not a heap reference: nothing is allocated and the collector never traces one.
+- **There is no capture.** A function value names a function and carries no environment.
+- A call names a variable or a function, not an arbitrary expression. Read a field or a returned function into a variable and call through that.
+- A variable shadows a function of the same name, so `f()` calls a local `f` when one is in scope. Calling a variable that is not a function type is an error.
+- Builtins have no index and cannot be function values.
+- `void` and array types may not appear in a signature, for the same reasons they may not be parameters or return types.
+
 ## Types
 
 | Type | Meaning |
@@ -82,10 +107,11 @@ A compile error exits `2` and a runtime error exits `3`, so the tool's own failu
 | `float` | 32-bit IEEE 754 single precision, about seven significant digits. Two slots wide. Never mixes with `int` implicitly. See [Floats](#floats). |
 | `bool` | `true` / `false`. Not implicitly convertible to or from `int`. |
 | `str` | A string: a heap object holding its length and characters. Built with literals, `+`, slicing and conversion, and collected like any other object. There is no null string. |
-| `ptr` | An address in the current frame, produced by `&`. See [Pointers](#pointers-and-address-of). |
+| `ptr` | An address in the current frame, produced by `@`. See [Pointers](#pointers-and-address-of). |
 | `heapptr` | An address in the heap, produced by `alloc`. See [Heap](#heap-alloc--heap_load--heap_store). |
 | `void` | No value. Only valid as a return type. |
 | `int[N]` | Fixed-size array of `N` ints in the current frame. `N` must be a positive integer literal. |
+| `fn(T, ...): R` | A function taking those parameter types and returning `R`. One word: an index into the function table, not a heap address. See [Functions as values](#functions-as-values). |
 | a struct name | A reference to a heap object of that struct type. See [Structs](#structs). |
 
 `bool` is a distinct type, not an alias for `0`/`1`: conditions must be `bool`, `true + 1` is a type error, and `if (1)` is rejected with `If condition must be bool`.
