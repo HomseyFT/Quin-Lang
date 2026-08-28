@@ -516,6 +516,13 @@ class Debugger:
                 return Value(f"<unreadable str at {word}>", type_name)
         if type_name in ("int", "heapptr", "ptr"):
             return Value(str(to_signed(word)), type_name)
+        if type_name.startswith("fn("):
+            # A function value is an index into the function table, so it reads
+            # back as the name of what it refers to. Not a heap reference:
+            # there is nothing to follow and nothing to expand.
+            if 0 <= word < len(self.functions):
+                return Value(self.functions[word].name, type_name)
+            return Value(f"<function {to_signed(word)}>", type_name)
         return self._describe_object(vm, word, type_name)
 
     def _describe_object(self, vm: QuinVM, ref: int, type_name: str) -> Value:

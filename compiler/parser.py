@@ -140,7 +140,29 @@ class Parser:
         body = self._block()
         return A.Function(name_tok.lexeme, params, ret_type, body, line=name_tok.line, col=name_tok.col)
 
+    def _function_type_name(self) -> str:
+        """`fn(T, ...)` with an optional `: R`, already consumed the `fn`.
+
+        Canonicalised on the way out -- no spaces, and an omitted return type
+        written out as `void` -- so that one signature has one spelling, which
+        is what lets the type system compare them as strings.
+        """
+        self._consume(TokenType.LEFT_PAREN, "Expected '(' after 'fn' in a type")
+        params = []
+        if not self._check(TokenType.RIGHT_PAREN):
+            params.append(self._type_name())
+            while self._match(TokenType.COMMA):
+                params.append(self._type_name())
+        self._consume(TokenType.RIGHT_PAREN,
+                      "Expected ')' after function type parameters")
+        ret = self._type_name() if self._match(TokenType.COLON) else "void"
+        return f"fn({','.join(params)}):{ret}"
+
     def _type_name(self) -> str:
+        # Before the rest: `fn` is a keyword, so it never reaches the
+        # identifier fallback that would read it as a struct name.
+        if self._match(TokenType.FN):
+            return self._function_type_name()
         if self._match(TokenType.INT):
             base = "int"
         elif self._match(TokenType.STR):

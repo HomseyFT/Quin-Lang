@@ -680,6 +680,16 @@ class CodeGenVM:
                 raise CodegenError(
                     f"[{e.line}:{e.col}] Unsupported literal {e.value!r}"
                 )
+        elif isinstance(e, A.Identifier) and id(e) in ctx.func_ref:
+            # A function value is which function, and nothing else: its index
+            # in the table CALL already indexes. Not a heap address, so it
+            # needs no allocation and the collector never sees it.
+            name = ctx.func_ref[id(e)]
+            if name not in self.func_name_to_index:
+                raise CodegenError(
+                    f"[{e.line}:{e.col}] No index for function '{name}'")
+            self.code.append(Instruction(OpCode.PUSH_INT,
+                                         self.func_name_to_index[name]))
         elif isinstance(e, A.Identifier) and id(e) in ctx.variant_ctor:
             self._emit_variant(e, [], layout, ctx)
         elif isinstance(e, A.Identifier):
@@ -956,6 +966,18 @@ class CodeGenVM:
         self.code.append(Instruction(binary_ops[e.op]))
 
     def _emit_call(self, e: A.Call, layout: FunctionLayout, ctx: Context):
+        # Before the builtins below: a variable shadowing one of their names is
+        # still a call through that variable, which is what sema decided.
+        if id(e) in ctx.indirect_calls:
+            for arg_expr in e.args:
+                self._emit_expr(arg_expr, layout, ctx)
+            # The function goes on last, so CALL_INDIRECT pops it and finds
+            # the arguments beneath it exactly where CALL would.
+            self.code.append(Instruction(OpCode.LOAD_LOCAL,
+                                         self._slot(e, layout, ctx).index))
+            self.code.append(Instruction(OpCode.CALL_INDIRECT))
+            return
+
         name = e.callee
 
         # array_push(xs: int[N], len: int, value: int) -> int (new len)

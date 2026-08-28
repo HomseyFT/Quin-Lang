@@ -837,6 +837,41 @@ class QuinVM:
         if addr < 0 or addr + 2 > len(self.heap):
             raise VMError(f"{what} out of range: addr={addr}, heap_size={len(self.heap)}")
 
+    def _enter_function(self, fn_id: int, op_name: str) -> None:
+        """Push a frame and jump into a function.
+
+        Shared by CALL and CALL_INDIRECT, which differ only in where the index
+        came from -- the operand or the stack. Kept in one place because the
+        argument-to-slot copying below is subtle enough that a second copy
+        would drift.
+        """
+        if fn_id < 0 or fn_id >= len(self.functions):
+            raise VMError(f"{op_name} to invalid function index {fn_id}")
+        fn = self.functions[fn_id]
+        # Arguments belong to the caller's frame, so pop them before
+        # recording the new frame base.
+        args: List[int] = [self._pop() for _ in range(fn.num_params)]
+        args.reverse()  # args[0] is now the first parameter
+        self.call_stack.append(
+            Frame(self.pc, self.locals, self.frame_base, self.current_fn))
+        self.current_fn = fn_id
+        self.locals = [0] * fn.num_locals
+        # Arguments land in the leading locals, but a float argument arrives
+        # as one stack entry and fills two slots, so the slot index advances
+        # by each parameter's width rather than by one.
+        slot = 0
+        for i, v in enumerate(args):
+            width = fn.param_words[i] if i < len(fn.param_words) else 1
+            if width == 2:
+                if slot + 1 < len(self.locals):
+                    self.locals[slot] = v & WORD_MASK
+                    self.locals[slot + 1] = (v >> 16) & WORD_MASK
+            elif slot < len(self.locals):
+                self.locals[slot] = v & WORD_MASK
+            slot += width
+        self.frame_base = len(self.stack)
+        self.pc = fn.entry_pc
+
     # -- interpreter -----------------------------------------------------
 
     def _run(self) -> int:
@@ -1071,33 +1106,13 @@ class QuinVM:
                     self.pc = int(arg)
 
             elif op is OpCode.CALL:
-                fn_id = int(arg)
-                if fn_id < 0 or fn_id >= len(self.functions):
-                    raise VMError(f"CALL to invalid function index {fn_id}")
-                fn = self.functions[fn_id]
-                # Arguments belong to the caller's frame, so pop them before
-                # recording the new frame base.
-                args: List[int] = [self._pop() for _ in range(fn.num_params)]
-                args.reverse()  # args[0] is now the first parameter
-                self.call_stack.append(
-                    Frame(self.pc, self.locals, self.frame_base, self.current_fn))
-                self.current_fn = fn_id
-                self.locals = [0] * fn.num_locals
-                # Arguments land in the leading locals, but a float argument
-                # arrives as one stack entry and fills two slots, so the slot
-                # index advances by each parameter's width rather than by one.
-                slot = 0
-                for i, v in enumerate(args):
-                    width = fn.param_words[i] if i < len(fn.param_words) else 1
-                    if width == 2:
-                        if slot + 1 < len(self.locals):
-                            self.locals[slot] = v & WORD_MASK
-                            self.locals[slot + 1] = (v >> 16) & WORD_MASK
-                    elif slot < len(self.locals):
-                        self.locals[slot] = v & WORD_MASK
-                    slot += width
-                self.frame_base = len(self.stack)
-                self.pc = fn.entry_pc
+                self._enter_function(int(arg), "CALL")
+
+            elif op is OpCode.CALL_INDIRECT:
+                # The function is on top: the caller pushes its arguments
+                # first, then which function to run, so popping the index here
+                # leaves the arguments exactly where CALL would find them.
+                self._enter_function(self._pop(), "CALL_INDIRECT")
 
             elif op is OpCode.RET:
                 # Every function pushes exactly one return value.

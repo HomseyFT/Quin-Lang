@@ -1,11 +1,11 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from . import ast as A
 from .compiler_types import (
     Type, Int, Str, Float, Void, Bool, Ptr, HeapPtr, Null, StructInfo, StructField,
     EnumInfo, VariantInfo, is_enum_type,
-    type_from_name, is_array_type, array_length, is_struct_type, is_reference_type,
+    type_from_name, is_array_type, array_length, is_struct_type, is_func_type, func_type, is_reference_type,
     assignable, comparable, word_count, BUILTIN_TYPES, UnknownTypeError,
 )
 from .builtins import get_builtins
@@ -92,6 +92,9 @@ class FunctionSig:
     name: str
     params: List[Type]
     ret: Type
+    # A builtin is lowered to instructions at the call site and has no entry in
+    # the function table, so it has no index and cannot become a value.
+    is_builtin: bool = False
 
 class Scope:
     def __init__(self, parent: Optional[Scope] = None):
@@ -148,6 +151,11 @@ class Context:
         self.variants: Dict[str, VariantInfo] = {}
         # id(Call | Identifier) -> the variant that expression constructs.
         self.variant_ctor: Dict[int, VariantInfo] = {}
+        # id(Identifier) -> the function it names as a value, rather than calls.
+        self.func_ref: Dict[int, str] = {}
+        # id(Call) -> calls through a function-typed variable, not a name. The
+        # binding table says which variable; this says the call is indirect.
+        self.indirect_calls: Set[int] = set()
         # id(MatchArm) -> the variant it matches; absent for the '_' arm.
         self.arm_variant: Dict[int, VariantInfo] = {}
         # id(MatchArm) -> the symbols its bindings declare, in payload order.
@@ -330,7 +338,8 @@ class SemanticAnalyzer:
                 continue
             param_types = [type_from_name(tn) for tn in param_names]
             ret_type = type_from_name(ret_name)
-            self.ctx.functions[name] = FunctionSig(name, param_types, ret_type)
+            self.ctx.functions[name] = FunctionSig(name, param_types, ret_type,
+                                                  is_builtin=True)
 
         # First pass: collect user-defined function signatures
         for fn in program.functions:
@@ -664,6 +673,32 @@ class SemanticAnalyzer:
                 f"'{name}' is a variant name; write {spelled}", e.line, e.col
             )
 
+    def _analyze_indirect_call(self, e, local, scope) -> Type:
+        """`f(x)` where `f` is a variable rather than a declared function.
+
+        Which function runs is not known until it runs, so this checks the call
+        against the variable's signature; the arity and argument types are as
+        static as a direct call's, only the identity is not.
+        """
+        ft = local.type
+        if not is_func_type(ft):
+            raise SemanticError(
+                f"'{e.callee}' has type {ft}, not a function", e.line, e.col)
+        if not ft.arity_matches(len(e.args)):
+            raise SemanticError(
+                f"'{e.callee}' expects {len(ft.params)} args, "
+                f"got {len(e.args)}", e.line, e.col)
+        for a, pt in zip(e.args, ft.params):
+            at = self._analyze_expr(a, scope)
+            if not assignable(pt, at):
+                raise SemanticError(
+                    f"Argument type mismatch: expected {pt}, got {at}",
+                    e.line, e.col)
+        self.ctx.bind(e, local)
+        self.ctx.indirect_calls.add(id(e))
+        self.ctx.set_type(e, ft.ret)
+        return ft.ret
+
     def _analyze_variant_construction(self, e: A.Expr, name: str, args: List[A.Expr],
                                       scope: Scope) -> Type:
         """Type `Ok(5)` or a bare `Pending`.
@@ -830,6 +865,19 @@ class SemanticAnalyzer:
                             e.line, e.col,
                         )
                     return self._analyze_variant_construction(e, e.name, [], scope)
+                sig = self.ctx.functions.get(e.name)
+                if sig is not None:
+                    if sig.is_builtin:
+                        raise SemanticError(
+                            f"'{e.name}' is a builtin, not a function value: "
+                            f"builtins compile to instructions and have no "
+                            f"index to refer to",
+                            e.line, e.col,
+                        )
+                    t = func_type(sig.params, sig.ret)
+                    self.ctx.func_ref[id(e)] = e.name
+                    self.ctx.set_type(e, t)
+                    return t
                 self._reject_variant_name(e, e.name)
                 raise SemanticError(f"Undeclared variable '{e.name}'", e.line, e.col)
             self.ctx.bind(e, sym)
@@ -1092,6 +1140,12 @@ class SemanticAnalyzer:
                 self._check_const_length(arr_t, e.args[1], "array_pop", -1, e.line, e.col)
                 self.ctx.set_type(e, Int)
                 return Int
+            # A variable shadows a function of the same name, here as
+            # everywhere else, so the scope is consulted before the function
+            # table rather than after it.
+            local = scope.resolve(e.callee)
+            if local is not None:
+                return self._analyze_indirect_call(e, local, scope)
             if e.callee in self.ctx.variants:
                 return self._analyze_variant_construction(e, e.callee, e.args, scope)
             if e.callee not in self.ctx.functions:

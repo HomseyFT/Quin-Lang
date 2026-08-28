@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 @dataclass(frozen=True)
 class Type:
@@ -46,6 +46,9 @@ BUILTIN_TYPES: Dict[str, Type] = {
 }
 
 ARRAY_PREFIX = "int["
+
+# A function type is spelled fn(T, ...): R, and canonicalised to fn(T,...):R.
+FUNC_PREFIX = "fn("
 
 
 @dataclass(frozen=True)
@@ -142,6 +145,37 @@ class EnumInfo:
         return EnumType(self.name, 2)
 
 
+@dataclass(frozen=True)
+class FuncType(Type):
+    """A reference to a named function: one word, holding its index in the
+    program's function table.
+
+    Deliberately *not* a heap reference. A function value names code, which
+    neither moves nor is collected, so is_reference_type stays False for it and
+    the collector never traces one. That is the whole reason the type is this
+    cheap -- and the reason there is no capture: a value carrying captured
+    state would have to live on the heap and be traced like any other object.
+
+    Subclassed for the same reason StructType is: a dataclass __eq__ requires
+    both sides to be the same class, so a struct named `fn(int):int` -- which
+    nobody can declare, but the type system should not rely on that -- stays a
+    distinct type. Equality is by `name`, which is canonical, so two spellings
+    of one signature are one type.
+    """
+    params: Tuple[Type, ...] = ()
+    ret: Type = Void
+
+    def arity_matches(self, count: int) -> bool:
+        return count == len(self.params)
+
+
+def func_type(params, ret: Type) -> FuncType:
+    """The FuncType for a signature, under its canonical spelling."""
+    params = tuple(params)
+    spelling = f"fn({','.join(p.name for p in params)}):{ret.name}"
+    return FuncType(spelling, 2, params, ret)
+
+
 def word_count(t: Type) -> int:
     """How many 16-bit slots a value of this type occupies.
 
@@ -152,6 +186,10 @@ def word_count(t: Type) -> int:
     answers that question.
     """
     return 2 if t == Float else 1
+
+
+def is_func_type(t: Type) -> bool:
+    return isinstance(t, FuncType)
 
 
 def is_struct_type(t: Type) -> bool:
@@ -211,6 +249,59 @@ def array_length_from_name(name: Optional[str]) -> Optional[int]:
     return n
 
 
+def split_top_level(text: str) -> List[str]:
+    """Split on commas that are not inside a nested parameter list, so that
+    `int,fn(int,int):int` is two parameters rather than three."""
+    parts, depth, start = [], 0, 0
+    for i, c in enumerate(text):
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    parts.append(text[start:])
+    return [p.strip() for p in parts]
+
+
+def func_signature_from_name(name: Optional[str]):
+    """(parameter type names, return type name) for a type of the form
+    `fn(...)` or `fn(...):R`, None if it isn't one.
+
+    Written as string surgery for the same reason array_length_from_name is:
+    the parser hands types down as their spelling, so this is where a spelling
+    becomes structure. Raises UnknownTypeError on a malformed one.
+    """
+    if not isinstance(name, str) or not name.startswith(FUNC_PREFIX):
+        return None
+
+    depth, close = 0, -1
+    for i, c in enumerate(name[len(FUNC_PREFIX) - 1:], start=len(FUNC_PREFIX) - 1):
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                close = i
+                break
+    if close < 0:
+        raise UnknownTypeError(f"Unbalanced '(' in function type '{name}'")
+
+    inner, rest = name[len(FUNC_PREFIX):close], name[close + 1:]
+    if rest == "":
+        ret_name = "void"       # an omitted return type is void, as it is on a declaration
+    elif rest.startswith(":") and len(rest) > 1:
+        ret_name = rest[1:]
+    else:
+        raise UnknownTypeError(f"Malformed function type '{name}'")
+
+    params = [] if not inner.strip() else split_top_level(inner)
+    if any(not p for p in params):
+        raise UnknownTypeError(f"Empty parameter type in function type '{name}'")
+    return params, ret_name
+
+
 def type_from_name(name: str, structs: Optional[Dict[str, "StructInfo"]] = None,
                    enums: Optional[Dict[str, "EnumInfo"]] = None) -> Type:
     if not isinstance(name, str):
@@ -218,6 +309,23 @@ def type_from_name(name: str, structs: Optional[Dict[str, "StructInfo"]] = None,
     n = array_length_from_name(name)
     if n is not None:
         return Type(name, 2 * n)
+    signature = func_signature_from_name(name)
+    if signature is not None:
+        param_names, ret_name = signature
+        params = []
+        for param_name in param_names:
+            t = type_from_name(param_name, structs, enums)
+            # The same two rules a declared parameter obeys, enforced here so a
+            # signature that could never be satisfied cannot be written down.
+            if t == Void:
+                raise UnknownTypeError(f"'void' is not a parameter type in '{name}'")
+            if is_array_type(t):
+                raise UnknownTypeError(f"An array is not a parameter type in '{name}'")
+            params.append(t)
+        ret = type_from_name(ret_name, structs, enums)
+        if is_array_type(ret):
+            raise UnknownTypeError(f"An array is not a return type in '{name}'")
+        return func_type(params, ret)
     if name in BUILTIN_TYPES:
         return BUILTIN_TYPES[name]
     if structs and name in structs:

@@ -140,6 +140,11 @@ class OpCode(Enum):
     ARGC = 77              # push the argument count, including the program name
     ARGV = 78              # pop an index, push that argument
 
+    # Calling a function value: identical to CALL once it has an index, but the
+    # index arrives on the stack rather than in the operand, so which function
+    # runs is not known until it does.
+    CALL_INDIRECT = 79     # pop a function index, then call it
+
 
 Operand = Union[int, None]
 
