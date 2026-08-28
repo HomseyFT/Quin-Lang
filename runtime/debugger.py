@@ -237,6 +237,18 @@ class Debugger:
         self._by_pc[pc] = bp
         return bp
 
+    def clear_breakpoints(self) -> None:
+        """Drop every breakpoint.
+
+        For a front end whose breakpoint set is declarative -- DAP sends the
+        whole desired list for a file and expects it to replace what was there
+        -- rebuilding from empty is the only way to avoid aliasing: two
+        requested lines that resolve to the same pc share one Breakpoint here,
+        so removing them one at a time can take a third one's with it.
+        """
+        self.breakpoints.clear()
+        self._by_pc.clear()
+
     def remove(self, bp_id: int) -> None:
         bp = self.breakpoints.pop(bp_id, None)
         if bp is None:

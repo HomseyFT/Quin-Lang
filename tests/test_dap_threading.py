@@ -1,182 +1,13 @@
 """The VM thread, stops, and resuming.
 
-These tests need a client that can *react*. The scripted transport in
-tests/test_dap_session.py has decided every byte it will send before the
-adapter says anything, so it can never answer a `stopped` event -- and every
-failure worth catching here is one where the answer never arrives. So the
-client here sits on a real socket, reads on its own thread, and waits for the
-message it expects with a deadline.
-
-Every wait is bounded. A deadlock in the handoff is the failure this milestone
-exists to prevent, and a test that hangs forever reports it as nothing at all.
+The failure this milestone exists to prevent is a deadlock in the handoff
+between the request loop and the program, so every test here drives a real
+adapter over a socket and every wait has a deadline.
 """
 
-import socket
-import tempfile
-import threading
-import time
 import unittest
-from pathlib import Path
 
-from dap.protocol import MessageStream, ProtocolError
-from dap.session import DebugSession
-
-# Generous: it only ever elapses when something is genuinely stuck, and the
-# programs under test take milliseconds.
-TIMEOUT_SECONDS = 10.0
-
-
-class LiveClient:
-    """A DAP client on the other end of a socket pair."""
-
-    def __init__(self, std_path=None):
-        client_sock, adapter_sock = socket.socketpair()
-        self._sockets = (client_sock, adapter_sock)
-        # Kept so they can be closed explicitly: a BufferedWriter flushed by
-        # the garbage collector after its socket is gone prints a traceback
-        # nobody can catch.
-        self._files = [sock.makefile(mode)
-                       for sock in self._sockets for mode in ("rb", "wb")]
-        self._stream = MessageStream(self._files[0], self._files[1])
-        self.session = DebugSession(MessageStream(self._files[2], self._files[3]),
-                                    std_path)
-
-        self.messages = []
-        self._cursor = 0
-        self._closed = False
-        self._condition = threading.Condition()
-
-        self._serving = threading.Thread(target=self._serve, daemon=True)
-        self._serving.start()
-        self._reading = threading.Thread(target=self._drain, daemon=True)
-        self._reading.start()
-
-    # -- the two background threads --------------------------------------
-
-    def _serve(self):
-        try:
-            self.session.serve()
-        finally:
-            # The client's reader is blocked on this socket; without the
-            # shutdown it would wait out its deadline after a clean exit.
-            self._shutdown(self._sockets[1])
-
-    def _drain(self):
-        while True:
-            try:
-                message = self._stream.read()
-            except (OSError, ProtocolError, ValueError):
-                message = None
-            with self._condition:
-                if message is None:
-                    self._closed = True
-                else:
-                    self.messages.append(message)
-                self._condition.notify_all()
-                if message is None:
-                    return
-
-    @staticmethod
-    def _shutdown(sock):
-        try:
-            sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-
-    # -- driving ---------------------------------------------------------
-
-    def send(self, command, **arguments):
-        self._stream.write({"type": "request", "command": command,
-                            "arguments": arguments})
-
-    def wait_for(self, predicate, what):
-        """The next message matching `predicate`, consuming everything before it."""
-        deadline = time.monotonic() + TIMEOUT_SECONDS
-        with self._condition:
-            while True:
-                while self._cursor < len(self.messages):
-                    message = self.messages[self._cursor]
-                    self._cursor += 1
-                    if predicate(message):
-                        return message
-                remaining = deadline - time.monotonic()
-                if self._closed or remaining <= 0:
-                    raise AssertionError(f"timed out waiting for {what}")
-                self._condition.wait(remaining)
-
-    def wait_for_event(self, name):
-        return self.wait_for(lambda m: m["type"] == "event" and m["event"] == name,
-                             f"event '{name}'")
-
-    def wait_for_response(self, command):
-        return self.wait_for(
-            lambda m: m["type"] == "response" and m["command"] == command,
-            f"response to '{command}'")
-
-    def events(self, name):
-        with self._condition:
-            return [m for m in self.messages
-                    if m["type"] == "event" and m["event"] == name]
-
-    def output(self, category="stdout"):
-        return "".join(m["body"]["output"] for m in self.events("output")
-                       if m["body"]["category"] == category)
-
-    def hang_up(self):
-        """Vanish without a `disconnect`, the way a crashed client does."""
-        for sock in self._sockets:
-            self._shutdown(sock)
-        self._join()
-
-    def close(self):
-        """Leave the way a client does, then tear the transport down."""
-        try:
-            self.send("disconnect")
-            self.wait_for_response("disconnect")
-        except (OSError, ValueError, AssertionError):
-            pass            # already gone, or never got that far
-        for sock in self._sockets:
-            self._shutdown(sock)
-        self._join()
-        for stream in self._files:
-            try:
-                stream.close()
-            except OSError:
-                pass
-        for sock in self._sockets:
-            sock.close()
-
-    def _join(self):
-        self._serving.join(TIMEOUT_SECONDS)
-        self._reading.join(TIMEOUT_SECONDS)
-        if self._serving.is_alive():
-            raise AssertionError("the adapter did not stop serving")
-
-
-class ThreadingTestCase(unittest.TestCase):
-    def client(self, source, *, stop_on_entry=False, args=None, launch=True):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        path = Path(directory.name) / "main.ql"
-        path.write_text(source, encoding="utf-8")
-
-        client = LiveClient()
-        self.addCleanup(client.close)
-        client.send("initialize")
-        client.wait_for_response("initialize")
-        if launch:
-            client.send("launch", program=str(path), stopOnEntry=stop_on_entry,
-                        args=list(args or []))
-            client.wait_for_response("launch")
-            client.send("configurationDone")
-            client.wait_for_response("configurationDone")
-        return client
-
-    def assertStopped(self, client, reason):
-        stopped = client.wait_for_event("stopped")
-        self.assertEqual(stopped["body"]["reason"], reason)
-        return stopped
-
+from tests.harness import DapTestCase
 
 HELLO = 'fn main(): int { println("hello"); return 0; }'
 
@@ -197,7 +28,7 @@ fn main(): int {
 """
 
 
-class TestStopOnEntry(ThreadingTestCase):
+class TestStopOnEntry(DapTestCase):
     def test_the_program_stops_before_anything_runs(self):
         client = self.client(HELLO, stop_on_entry=True)
         self.assertStopped(client, "entry")
@@ -242,7 +73,7 @@ class TestStopOnEntry(ThreadingTestCase):
         self.assertEqual(names[0]["name"], "main")
 
 
-class TestPause(ThreadingTestCase):
+class TestPause(DapTestCase):
     def test_a_running_program_can_be_paused(self):
         client = self.client(SPINNING)
         # Wait until it is genuinely running, so the pause is not racing the
@@ -270,7 +101,7 @@ class TestPause(ThreadingTestCase):
         self.assertFalse(client.wait_for_response("pause")["success"])
 
 
-class TestResumeRefusals(ThreadingTestCase):
+class TestResumeRefusals(DapTestCase):
     def test_continue_while_running_is_refused(self):
         client = self.client(SPINNING)
         client.wait_for(lambda m: m["type"] == "event" and m["event"] == "output"
@@ -291,7 +122,7 @@ class TestResumeRefusals(ThreadingTestCase):
         self.assertIn("faulted", reply["message"])
 
 
-class TestFaults(ThreadingTestCase):
+class TestFaults(DapTestCase):
     def test_a_fault_stops_for_inspection(self):
         client = self.client(FAULTING)
         body = self.assertStopped(client, "exception")["body"]
@@ -313,7 +144,7 @@ class TestFaults(ThreadingTestCase):
         self.assertEqual(client.events("exited")[0]["body"]["exitCode"], 3)
 
 
-class TestEnding(ThreadingTestCase):
+class TestEnding(DapTestCase):
     def test_disconnecting_while_stopped_abandons_the_program(self):
         client = self.client(HELLO, stop_on_entry=True)
         self.assertStopped(client, "entry")

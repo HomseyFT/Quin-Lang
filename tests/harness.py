@@ -8,7 +8,10 @@ type-check, lower, interpret) rather than any single pass in isolation.
 from __future__ import annotations
 
 import io
+import socket
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import dataclass
@@ -18,6 +21,8 @@ from typing import Optional, Tuple
 from compiler.resolver import ImportResolver, ResolveError
 from compiler.sema import SemanticAnalyzer, SemanticError
 from compiler.codegen_vm import CodeGenVM, CodegenError
+from dap.protocol import MessageStream, ProtocolError
+from dap.session import DebugSession as DapSession
 from runtime.program_io import CaptureIO
 from runtime.vm import QuinVM, VMError
 
@@ -251,3 +256,199 @@ def debug_session(source: str, commands) -> str:
 def main_wrapping(body: str) -> str:
     """Wrap statements in a `fn main(): int` that returns 0."""
     return f"fn main(): int {{\n{body}\n    return 0;\n}}"
+
+
+# -- the DAP adapter ---------------------------------------------------------
+#
+# The adapter is two threads, so a test that has decided every byte it will
+# send before starting cannot drive one: it can never answer a `stopped` event.
+# This client sits on a real socket, reads on its own thread, and waits for the
+# message it expects with a deadline -- bounded, because a deadlock reported as
+# a hang is a test that reports nothing at all.
+
+# Generous: it only elapses when something is genuinely stuck, and the programs
+# under test take milliseconds.
+DAP_TIMEOUT_SECONDS = 10.0
+
+
+class LiveClient:
+    """A DAP client on the other end of a socket pair."""
+
+    def __init__(self, std_path=None):
+        client_sock, adapter_sock = socket.socketpair()
+        self._sockets = (client_sock, adapter_sock)
+        # Kept so they can be closed explicitly: a BufferedWriter flushed by
+        # the garbage collector after its socket is gone prints a traceback
+        # nobody can catch.
+        self._files = [sock.makefile(mode)
+                       for sock in self._sockets for mode in ("rb", "wb")]
+        self._stream = MessageStream(self._files[0], self._files[1])
+        self.session = DapSession(MessageStream(self._files[2], self._files[3]),
+                                  std_path)
+
+        self.messages = []
+        self._cursor = 0
+        self._closed = False
+        self._condition = threading.Condition()
+
+        self._serving = threading.Thread(target=self._serve, daemon=True)
+        self._serving.start()
+        self._reading = threading.Thread(target=self._drain, daemon=True)
+        self._reading.start()
+
+    # -- the two background threads --------------------------------------
+
+    def _serve(self):
+        try:
+            self.session.serve()
+        finally:
+            # The client's reader is blocked on this socket; without the
+            # shutdown it would wait out its deadline after a clean exit.
+            self._shutdown(self._sockets[1])
+
+    def _drain(self):
+        while True:
+            try:
+                message = self._stream.read()
+            except (OSError, ProtocolError, ValueError):
+                message = None
+            with self._condition:
+                if message is None:
+                    self._closed = True
+                else:
+                    self.messages.append(message)
+                self._condition.notify_all()
+                if message is None:
+                    return
+
+    @staticmethod
+    def _shutdown(sock):
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    # -- driving ---------------------------------------------------------
+
+    def send(self, command, **arguments):
+        self._stream.write({"type": "request", "command": command,
+                            "arguments": arguments})
+
+    def wait_for(self, predicate, what):
+        """The next message matching `predicate`, consuming everything before it."""
+        deadline = time.monotonic() + DAP_TIMEOUT_SECONDS
+        with self._condition:
+            while True:
+                while self._cursor < len(self.messages):
+                    message = self.messages[self._cursor]
+                    self._cursor += 1
+                    if predicate(message):
+                        return message
+                remaining = deadline - time.monotonic()
+                if self._closed or remaining <= 0:
+                    raise AssertionError(f"timed out waiting for {what}")
+                self._condition.wait(remaining)
+
+    def wait_for_event(self, name):
+        return self.wait_for(lambda m: m["type"] == "event" and m["event"] == name,
+                             f"event '{name}'")
+
+    def wait_for_response(self, command):
+        return self.wait_for(
+            lambda m: m["type"] == "response" and m["command"] == command,
+            f"response to '{command}'")
+
+    def events(self, name):
+        with self._condition:
+            return [m for m in self.messages
+                    if m["type"] == "event" and m["event"] == name]
+
+    def output(self, category="stdout"):
+        return "".join(m["body"]["output"] for m in self.events("output")
+                       if m["body"]["category"] == category)
+
+    def hang_up(self):
+        """Vanish without a `disconnect`, the way a crashed client does."""
+        for sock in self._sockets:
+            self._shutdown(sock)
+        self._join()
+
+    def close(self):
+        """Leave the way a client does, then tear the transport down."""
+        try:
+            self.send("disconnect")
+            self.wait_for_response("disconnect")
+        except (OSError, ValueError, AssertionError):
+            pass            # already gone, or never got that far
+        for sock in self._sockets:
+            self._shutdown(sock)
+        self._join()
+        for stream in self._files:
+            try:
+                stream.close()
+            except OSError:
+                pass
+        for sock in self._sockets:
+            sock.close()
+
+    def _join(self):
+        self._serving.join(DAP_TIMEOUT_SECONDS)
+        self._reading.join(DAP_TIMEOUT_SECONDS)
+        if self._serving.is_alive():
+            raise AssertionError("the adapter did not stop serving")
+
+
+class DapTestCase(unittest.TestCase):
+    """A test that drives the adapter through a LiveClient."""
+
+    def write_program(self, source: str) -> str:
+        """A .ql file that outlives the test, so a session can compile it."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "main.ql"
+        path.write_text(source, encoding="utf-8")
+        return str(path)
+
+    def connect(self) -> LiveClient:
+        """An initialized client with nothing launched yet."""
+        client = LiveClient()
+        self.addCleanup(client.close)
+        client.send("initialize")
+        client.wait_for_response("initialize")
+        return client
+
+    def client(self, source, *, stop_on_entry=False, args=None, launch=True):
+        """The common case: initialized, launched, and configured."""
+        client = self.connect()
+        client.program_path = self.write_program(source)
+        if launch:
+            self.launch(client, stop_on_entry=stop_on_entry, args=args)
+            self.configuration_done(client)
+        return client
+
+    def launch(self, client, *, stop_on_entry=False, args=None):
+        client.send("launch", program=client.program_path,
+                    stopOnEntry=stop_on_entry, args=list(args or []))
+        return client.wait_for_response("launch")
+
+    def configuration_done(self, client):
+        client.send("configurationDone")
+        return client.wait_for_response("configurationDone")
+
+    def set_breakpoints(self, client, *lines, path=None):
+        """Replace one source's breakpoints; returns the reported array."""
+        client.send("setBreakpoints",
+                    source={"path": path or client.program_path},
+                    breakpoints=[{"line": line} for line in lines])
+        return client.wait_for_response("setBreakpoints")["body"]["breakpoints"]
+
+    def set_function_breakpoints(self, client, *names):
+        client.send("setFunctionBreakpoints",
+                    breakpoints=[{"name": name} for name in names])
+        return client.wait_for_response(
+            "setFunctionBreakpoints")["body"]["breakpoints"]
+
+    def assertStopped(self, client, reason):
+        stopped = client.wait_for_event("stopped")
+        self.assertEqual(stopped["body"]["reason"], reason)
+        return stopped

@@ -18,12 +18,13 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from compiler.driver_vm import process_exit_code
 from compiler.pipeline import CompileError, compile_path, describe_error
 from dap.protocol import MessageStream, ProtocolError, event, response
-from runtime.debugger import Debugger, Mode, Quit, Stop, StopReason
+from runtime.debugger import (Breakpoint, Debugger, DebuggerError, Mode, Quit,
+                              Stop, StopReason)
 from runtime.vm import QuinVM, VMError
 
 # What the adapter tells the client it can do. Declaring a capability that is
@@ -33,7 +34,7 @@ CAPABILITIES = {
     "supportsConfigurationDoneRequest": True,
     "supportsTerminateRequest": True,
     "supportsCancelRequest": False,
-    "supportsFunctionBreakpoints": False,
+    "supportsFunctionBreakpoints": True,
     "supportsEvaluateForHovers": False,
     "supportsSetVariable": False,
     "supportsConditionalBreakpoints": False,
@@ -81,6 +82,79 @@ class Suspension:
     """
     stop: Stop
     resume_mode: Optional[Mode] = None
+
+
+def resolved_path(path: str) -> str:
+    """The spelling `Function.source_file` uses.
+
+    The resolver stamps every function with an absolute, resolved path, and
+    clients send absolute paths that may still differ by a symlink or a `..`.
+    Resolving both sides makes them comparable; the client's own spelling is
+    what gets echoed back, so its markers land on the file it opened.
+    """
+    try:
+        return str(Path(path).resolve())
+    except OSError:
+        return path
+
+
+@dataclass
+class ClientBreakpoint:
+    """One breakpoint as the client asked for it, and where it landed.
+
+    Ids are the adapter's own rather than `Debugger`'s, for two reasons: a
+    breakpoint set before anything is compiled has no `Debugger` breakpoint yet
+    and still needs an id to be referred to by, and two requested lines that
+    resolve to the same pc share a single `Debugger` breakpoint while remaining
+    two separate markers in the client's UI.
+
+    `function` names a function breakpoint; otherwise it is a line in a file.
+    """
+    id: int
+    function: Optional[str] = None
+    client_path: str = ""
+    path: str = ""
+    line: int = 0
+
+    # Filled in by resolution, and `reported` is the last body the client was
+    # told, so a re-resolve knows whether it has news.
+    resolved_file: str = ""
+    resolved_line: Optional[int] = None
+    message: str = ""
+    reported: Optional[Dict[str, Any]] = None
+
+    def resolve(self, debugger: Debugger) -> Optional[Breakpoint]:
+        try:
+            if self.function is not None:
+                bp = debugger.break_at_function(self.function)
+            else:
+                bp = debugger.break_at_line(self.line, self.path)
+        except DebuggerError as e:
+            self.resolved_file, self.resolved_line, self.message = "", None, str(e)
+            return None
+        self.resolved_file, self.resolved_line, self.message = bp.file, bp.line, ""
+        return bp
+
+    def body(self) -> Dict[str, Any]:
+        """The DAP `Breakpoint`.
+
+        `line` is the resolved one, which is the point: `break_at_line` walks
+        forward past a blank line or a closing brace to the next line carrying
+        code, and DAP has a channel for saying so, so the client moves its
+        marker to where the breakpoint really is.
+        """
+        verified = self.resolved_line is not None
+        body: Dict[str, Any] = {"id": self.id, "verified": verified}
+        if self.message:
+            body["message"] = self.message
+        if self.function is not None:
+            if verified:
+                body["source"] = {"path": self.resolved_file}
+                body["line"] = self.resolved_line
+            return body
+        body["line"] = self.resolved_line if verified else self.line
+        body["source"] = {"path": self.client_path}
+        return body
 
 
 class AdapterIO:
@@ -144,6 +218,14 @@ class DebugSession:
         self._debugger: Optional[Debugger] = None
         self._vm: Optional[QuinVM] = None
         self._faulted = False
+
+        # The client's desired breakpoints, which outlive any one resolution:
+        # they arrive before there is a program to resolve them against, and
+        # are re-resolved whenever the set changes.
+        self._source_breakpoints: Dict[str, List[ClientBreakpoint]] = {}
+        self._function_breakpoints: List[ClientBreakpoint] = []
+        self._next_breakpoint_id = 1
+        self._hit_ids: Dict[int, List[int]] = {}
 
     # -- the loop --------------------------------------------------------
 
@@ -236,13 +318,53 @@ class DebugSession:
         self._program = program
         self._launch_args = args
         self._stop_on_entry = bool(args.get("stopOnEntry"))
+        # Before the program starts, so breakpoints already sent are resolved
+        # and reported rather than missed on the first run.
+        self._debugger = Debugger(program, self._on_stop)
         self.reply(request)
+        self._rebuild_breakpoints()
         self._start_if_ready()
 
     def _on_configurationDone(self, request) -> None:
         self._configuration_done = True
         self.reply(request)
         self._start_if_ready()
+
+    def _on_setBreakpoints(self, request) -> None:
+        """Replace this source's breakpoints with the ones requested.
+
+        DAP is declarative and per-file: the request carries the complete set
+        for one source. The response is positional -- one entry per requested
+        breakpoint, in order, resolved or not -- because that is how the client
+        matches them back to the lines it asked about.
+        """
+        args = request.get("arguments") or {}
+        client_path = (args.get("source") or {}).get("path") or ""
+        if not client_path:
+            self.reply(request, success=False,
+                       message="setBreakpoints needs a source path")
+            return
+
+        path = resolved_path(client_path)
+        wanted = args.get("breakpoints") or []
+        records = [ClientBreakpoint(id=self._new_breakpoint_id(),
+                                    client_path=client_path, path=path,
+                                    line=int(want.get("line", 0)))
+                   for want in wanted]
+        self._source_breakpoints[path] = records
+        self._rebuild_breakpoints()
+        self.reply(request, {"breakpoints": [r.body() for r in records]})
+
+    def _on_setFunctionBreakpoints(self, request) -> None:
+        args = request.get("arguments") or {}
+        self._function_breakpoints = [
+            ClientBreakpoint(id=self._new_breakpoint_id(),
+                             function=str(want.get("name", "")))
+            for want in args.get("breakpoints") or []
+        ]
+        self._rebuild_breakpoints()
+        self.reply(request,
+                   {"breakpoints": [r.body() for r in self._function_breakpoints]})
 
     def _on_threads(self, request) -> None:
         self.reply(request, dict(THREADS))
@@ -266,7 +388,7 @@ class DebugSession:
         request loop inside a request, which is the deadlock this whole design
         is arranged to avoid.
         """
-        if self._debugger is None:
+        if self._thread is None or not self._thread.is_alive():
             self.reply(request, success=False, message="no program is running")
             return
         self._debugger.pause()
@@ -279,6 +401,45 @@ class DebugSession:
     def _on_terminate(self, request) -> None:
         self.reply(request)
         self._end_session()
+
+    # -- breakpoints -----------------------------------------------------
+
+    def _new_breakpoint_id(self) -> int:
+        self._next_breakpoint_id += 1
+        return self._next_breakpoint_id - 1
+
+    def _breakpoint_records(self) -> Iterator[ClientBreakpoint]:
+        yield from self._function_breakpoints
+        for records in self._source_breakpoints.values():
+            yield from records
+
+    def _rebuild_breakpoints(self) -> None:
+        """Re-resolve every breakpoint, and report the ones that moved.
+
+        Rebuilt from empty rather than patched. `Debugger` merges breakpoints
+        that land on the same pc, so removing "the ones for this file" one at a
+        time can take another file's with it; starting over cannot alias.
+
+        Nothing stops the client changing breakpoints while the program runs,
+        which leaves a window during the rebuild where one of them would not
+        fire. It is as long as the list is short, and the alternative is
+        refusing an edit the client considers always legal.
+        """
+        if self._debugger is not None:
+            self._debugger.clear_breakpoints()
+            self._hit_ids = {}
+            for record in self._breakpoint_records():
+                bp = record.resolve(self._debugger)
+                if bp is not None:
+                    self._hit_ids.setdefault(bp.id, []).append(record.id)
+
+        for record in self._breakpoint_records():
+            body = record.body()
+            # Only news is worth an event, and only for one the client has
+            # already been told about: the rest travel in the response.
+            if record.reported is not None and record.reported != body:
+                self.emit("breakpoint", {"reason": "changed", "breakpoint": body})
+            record.reported = body
 
     # -- resuming --------------------------------------------------------
 
@@ -316,7 +477,6 @@ class DebugSession:
         self._vm = QuinVM(self._program.code, self._program.functions,
                           self._program.strings, self._program.structs,
                           self._program.source_map, AdapterIO(self), argv)
-        self._debugger = Debugger(self._program, self._on_stop)
         # Daemon: a debuggee that ignores the pause flag -- a tight loop in the
         # VM's own C-level machinery, say -- must not keep the process alive.
         self._thread = threading.Thread(target=self._run_program,
@@ -377,6 +537,11 @@ class DebugSession:
         body = {"reason": STOP_REASONS[stop.reason],
                 "threadId": THREAD_ID,
                 "allThreadsStopped": True}
+        if stop.breakpoint is not None:
+            # The adapter's ids, and there can be more than one: two requested
+            # lines resolving to the same pc are one breakpoint here and two
+            # markers in the client.
+            body["hitBreakpointIds"] = list(self._hit_ids.get(stop.breakpoint.id, []))
         if stop.error is not None:
             # Clients show `description` in the stop banner and `text` in a
             # notification, so the full [line:col] message goes in the latter.
