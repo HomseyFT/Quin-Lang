@@ -398,6 +398,25 @@ class LiveClient:
             raise AssertionError("the adapter did not stop serving")
 
 
+# Programs a DAP test needs by shape rather than by content: one that never
+# stops on its own, and one that faults partway.
+SPINNING = """
+fn main(): int {
+    println("running");
+    while (true) { let x: int = 1; }
+    return 0;
+}
+"""
+
+FAULTING = """
+fn main(): int {
+    let z: int = 0;
+    println(10 / z);
+    return 0;
+}
+"""
+
+
 class DapTestCase(unittest.TestCase):
     """A test that drives the adapter through a LiveClient."""
 

@@ -370,15 +370,18 @@ class DebugSession:
         self.reply(request, dict(THREADS))
 
     def _on_continue(self, request) -> None:
-        refusal = self._refuse_resume()
-        if refusal is not None:
-            self.reply(request, success=False, message=refusal)
-            return
-        # Reply before releasing the program. Once it runs it may stop again
-        # at once, and a `stopped` event that overtakes the response to the
-        # request which caused it reads as a stop the client never asked for.
-        self.reply(request, {"allThreadsContinued": True})
-        self._release(Mode.RUN)
+        self._resume(request, Mode.RUN, {"allThreadsContinued": True})
+
+    def _on_next(self, request) -> None:
+        self._resume(request, Mode.STEP_OVER)
+
+    def _on_stepIn(self, request) -> None:
+        self._resume(request, Mode.STEP_IN)
+
+    def _on_stepOut(self, request) -> None:
+        # FINISH runs until this frame returns, which in `main` means to the
+        # end of the program -- the same thing the client's button means.
+        self._resume(request, Mode.FINISH)
 
     def _on_pause(self, request) -> None:
         """Ask for a stop; do not wait for one.
@@ -453,6 +456,17 @@ class DebugSession:
                 # coherent state to run on from.
                 return "the program has faulted and cannot continue"
         return None
+
+    def _resume(self, request, mode: Mode, body=None) -> None:
+        refusal = self._refuse_resume()
+        if refusal is not None:
+            self.reply(request, success=False, message=refusal)
+            return
+        # Reply before releasing the program. Once it runs it may stop again
+        # at once, and a `stopped` event that overtakes the response to the
+        # request which caused it reads as a stop the client never asked for.
+        self.reply(request, body)
+        self._release(mode)
 
     def _release(self, mode: Mode) -> None:
         with self._condition:

@@ -7,25 +7,9 @@ adapter over a socket and every wait has a deadline.
 
 import unittest
 
-from tests.harness import DapTestCase
+from tests.harness import FAULTING, SPINNING, DapTestCase
 
 HELLO = 'fn main(): int { println("hello"); return 0; }'
-
-SPINNING = """
-fn main(): int {
-    println("running");
-    while (true) { let x: int = 1; }
-    return 0;
-}
-"""
-
-FAULTING = """
-fn main(): int {
-    let z: int = 0;
-    println(10 / z);
-    return 0;
-}
-"""
 
 
 class TestStopOnEntry(DapTestCase):
