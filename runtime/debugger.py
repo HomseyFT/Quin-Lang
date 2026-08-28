@@ -18,6 +18,7 @@ in the runtime package beside the VM rather than beside the compiler.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Callable, Dict, List, Optional, Tuple
@@ -71,6 +72,7 @@ class StopReason(Enum):
     ENTRY = auto()
     BREAKPOINT = auto()
     STEP = auto()
+    PAUSE = auto()
     FAULT = auto()
 
 
@@ -128,6 +130,11 @@ class Debugger:
         self._mode: Optional[Mode] = Mode.ENTRY
         self._from_line: Optional[int] = None
         self._from_depth = 0
+
+        # Set from another thread to interrupt a running program. An Event
+        # rather than a bool: the writer and the reader are different threads,
+        # and this says so instead of leaning on the GIL for correctness.
+        self._pause_requested = threading.Event()
 
         self._ranges = self._function_ranges()
 
@@ -274,7 +281,21 @@ class Debugger:
         finally:
             vm.hook = None
 
+    def pause(self) -> None:
+        """Ask a running program to stop at the next instruction.
+
+        Safe to call from another thread, and from any mode: the check below
+        runs before the breakpoint lookup, so it is reached even while the
+        program is running freely.
+        """
+        self._pause_requested.set()
+
     def _on_instruction(self, vm: QuinVM) -> None:
+        if self._pause_requested.is_set():
+            self._pause_requested.clear()
+            self._stop(vm, Stop(StopReason.PAUSE, self.frames(vm)[0]))
+            return
+
         bp = self._by_pc.get(vm.pc)
         if bp is not None and bp.enabled:
             bp.hits += 1

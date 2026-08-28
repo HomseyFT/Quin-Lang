@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from typing import Any, BinaryIO, Dict, Optional
 
 HEADER_TERMINATOR = b"\r\n\r\n"
@@ -45,6 +46,13 @@ class MessageStream:
     Outgoing `seq` numbers are assigned here because they must be unique and
     increasing for the life of the connection, which is exactly this object's
     lifetime.
+
+    Writing is thread-safe. Once a program runs on its own thread, both it and
+    the request loop have things to say, and the guarantee that matters is that
+    a frame reaches the client whole and each gets its own seq. A lock gives
+    both directly. Queueing events for one writer to drain would give it too,
+    but the drain only runs between requests -- so a program printing in a loop
+    would appear to print nothing until the user next clicked something.
     """
 
     def __init__(self, reader: BinaryIO, writer: BinaryIO):
@@ -52,6 +60,7 @@ class MessageStream:
         self._writer = writer
         self._buffer = bytearray()
         self._seq = 0
+        self._write_lock = threading.Lock()
 
     # -- reading ---------------------------------------------------------
 
@@ -132,6 +141,10 @@ class MessageStream:
 
     def write(self, message: Dict[str, Any]) -> int:
         """Frame and send one message, returning the `seq` it was given."""
+        with self._write_lock:
+            return self._write_locked(message)
+
+    def _write_locked(self, message: Dict[str, Any]) -> int:
         self._seq += 1
         message = dict(message, seq=self._seq)
         # ensure_ascii=False so the body carries real UTF-8 rather than \uXXXX
