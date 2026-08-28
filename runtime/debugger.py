@@ -104,6 +104,40 @@ class FrameView:
     locals: List[int]
 
 
+class ValueKind(Enum):
+    """What a value is made of, which is what a front end needs to render it."""
+    SCALAR = auto()     # nothing inside: int, bool, float, str, null, an address
+    STRUCT = auto()     # named fields
+    VARIANT = auto()    # an enum variant, whose payload is positional
+    ARRAY = auto()      # N consecutive slots of one type
+
+
+@dataclass(frozen=True)
+class Value:
+    """One value, described rather than rendered.
+
+    Two front ends want the same information in different shapes: a terminal
+    flattens the whole thing onto one line, while DAP hands the client a handle
+    and expands one level per click. So this says what the value is and where
+    its children live, and leaves rendering to whoever asked.
+
+    `summary` is the one-line form with children elided -- `Node {...}` -- which
+    is what DAP shows beside the expander. `type_name` is the declared type;
+    `object_name` is what the object's own layout calls itself, which for a
+    variant is the qualified `Result::Ok` and differs from the declared `Result`.
+    """
+    summary: str
+    type_name: str
+    kind: ValueKind = ValueKind.SCALAR
+    address: int = 0            # the heap object, for STRUCT and VARIANT
+    object_name: str = ""
+    elements: Tuple[Tuple[str, "Value"], ...] = ()   # ARRAY, read eagerly
+
+    @property
+    def expandable(self) -> bool:
+        return self.kind is not ValueKind.SCALAR
+
+
 @dataclass
 class Stop:
     """Why execution paused, and where."""
@@ -399,75 +433,126 @@ class Debugger:
         return [li for li in self.locals_of(frame) if li.name == name]
 
     def format_local(self, vm: QuinVM, frame: FrameView, info: LocalInfo) -> str:
-        return self._format_slots(vm, frame.locals, info.slot, info.type_name, info.words, 0)
+        """One line, everything expanded.
+
+        What a terminal front end shows, and the reason MAX_STRUCT_DEPTH still
+        exists: there is no click to expand one more level, so the whole value
+        has to be on the line and something has to stop a cyclic list.
+        """
+        return self._flatten(vm, self.describe_local(vm, frame, info), 0)
+
+    def describe_local(self, vm: QuinVM, frame: FrameView, info: LocalInfo) -> Value:
+        return self._describe_slots(vm, frame.locals, info.slot,
+                                    info.type_name, info.words)
+
+    def children_of(self, vm: QuinVM, value: Value) -> List[Tuple[str, Value]]:
+        """One level of `value`, and only one.
+
+        Nothing here recurses, which is what makes a cyclic structure safe to
+        walk: a front end that expands on demand can follow `next.next.next`
+        forever, one request at a time.
+        """
+        if value.kind is ValueKind.ARRAY:
+            return list(value.elements)
+        if value.address == 0:
+            return []
+        layout = self._layout_at(vm, value.address)
+        if layout is None:
+            return []
+        children = []
+        for index, field in enumerate(layout.fields):
+            # A variant's payload is positional -- its fields are named _0, _1
+            # -- and nothing in the language can refer to one by name, so it is
+            # numbered here the way an array element is.
+            name = f"[{index}]" if value.kind is ValueKind.VARIANT else field.name
+            children.append((name, self._describe_field(
+                vm, value.address + field.offset * 2, field.type_name)))
+        return children
 
     # -- value decoding --------------------------------------------------
 
     def _slot(self, slots: List[int], index: int) -> int:
         return slots[index] if 0 <= index < len(slots) else 0
 
-    def _format_slots(self, vm: QuinVM, slots: List[int], slot: int,
-                      type_name: str, words: int, depth: int) -> str:
-        """Render the value occupying `words` slots from `slot`."""
+    def _describe_slots(self, vm: QuinVM, slots: List[int], slot: int,
+                        type_name: str, words: int) -> Value:
+        """The value occupying `words` slots from `slot`."""
         if type_name.endswith("]"):
             base = type_name[:type_name.index("[")]
-            items = [self._format_slots(vm, slots, slot + i, base, 1, depth)
-                     for i in range(words)]
-            return "[" + ", ".join(items) + "]"
+            elements = tuple(
+                (f"[{i}]", self._describe_slots(vm, slots, slot + i, base, 1))
+                for i in range(words))
+            summary = "[" + ", ".join(v.summary for _, v in elements) + "]"
+            return Value(summary, type_name, ValueKind.ARRAY, elements=elements)
         if type_name == "float":
             low = self._slot(slots, slot)
             high = self._slot(slots, slot + 1)
-            return format_float(bits_to_float(low | (high << 16)))
-        return self._format_word(vm, self._slot(slots, slot), type_name, depth)
+            return Value(format_float(bits_to_float(low | (high << 16))), type_name)
+        return self._describe_word(vm, self._slot(slots, slot), type_name)
 
-    def _format_word(self, vm: QuinVM, word: int, type_name: str, depth: int) -> str:
+    def _describe_word(self, vm: QuinVM, word: int, type_name: str) -> Value:
         if type_name == "bool":
-            return "true" if word else "false"
+            return Value("true" if word else "false", type_name)
         if type_name == "str":
             if word == 0:
-                return "null"
+                return Value("null", type_name)
             try:
-                return '"' + vm._string_text(word) + '"'
+                return Value('"' + vm._string_text(word) + '"', type_name)
             except (VMError, IndexError, UnicodeDecodeError):
-                return f"<unreadable str at {word}>"
+                return Value(f"<unreadable str at {word}>", type_name)
         if type_name in ("int", "heapptr", "ptr"):
-            return str(to_signed(word))
-        return self._format_struct(vm, word, type_name, depth)
+            return Value(str(to_signed(word)), type_name)
+        return self._describe_object(vm, word, type_name)
 
-    def _format_struct(self, vm: QuinVM, ref: int, type_name: str, depth: int) -> str:
+    def _describe_object(self, vm: QuinVM, ref: int, type_name: str) -> Value:
+        """A heap reference, read through its own header.
+
+        The layout comes from what the object says it is rather than from the
+        declared type, so a wrong guess shows as an address instead of as the
+        wrong fields.
+        """
         if ref == 0:
-            return "null"
+            return Value("null", type_name)
         layout = self._layout_at(vm, ref)
-        if layout is None:
-            return f"<{type_name} at {ref}>"
-        if layout.is_variant and not layout.fields:
-            # A variant carrying nothing is written as a bare name, so that is
-            # how it reads back.
-            return layout.name
-        if not layout.fields:
-            return f"<{type_name} at {ref}>"
-        if depth >= MAX_STRUCT_DEPTH:
-            # A cyclic or deep structure: stop rather than recur forever.
-            return f"<{layout.name} at {ref}>"
-        values = [
-            self._format_field(vm, ref + f.offset * 2, f.type_name, depth + 1)
-            for f in layout.fields
-        ]
+        if layout is None or not layout.fields:
+            if layout is not None and layout.is_variant:
+                # A variant carrying nothing is written as a bare name, so that
+                # is how it reads back -- and there is nothing to expand.
+                return Value(layout.name, type_name, object_name=layout.name)
+            return Value(f"<{type_name} at {ref}>", type_name)
         if layout.is_variant:
-            # A variant's payload is positional, so showing the field names
-            # would show `_0`, which is not something anyone wrote.
-            return f"{layout.name}(" + ", ".join(values) + ")"
-        named = (f"{f.name}: {v}" for f, v in zip(layout.fields, values))
-        return f"{layout.name} {{ " + ", ".join(named) + " }"
+            return Value(f"{layout.name}(\u2026)", type_name, ValueKind.VARIANT,
+                         address=ref, object_name=layout.name)
+        return Value(f"{layout.name} {{\u2026}}", type_name, ValueKind.STRUCT,
+                     address=ref, object_name=layout.name)
 
-    def _format_field(self, vm: QuinVM, addr: int, type_name: str, depth: int) -> str:
+    def _describe_field(self, vm: QuinVM, addr: int, type_name: str) -> Value:
         try:
             if type_name == "float":
                 bits = vm._read_word(addr) | (vm._read_word(addr + 2) << 16)
-                return format_float(bits_to_float(bits))
-            return self._format_word(vm, vm._read_word(addr), type_name, depth)
+                return Value(format_float(bits_to_float(bits)), type_name)
+            return self._describe_word(vm, vm._read_word(addr), type_name)
         except (IndexError, VMError):
-            return "<unreadable>"
+            return Value("<unreadable>", type_name)
+
+    def _flatten(self, vm: QuinVM, value: Value, depth: int) -> str:
+        if value.kind is ValueKind.SCALAR:
+            return value.summary
+        if value.kind is ValueKind.ARRAY:
+            # An array is one value, not a level of nesting: its elements are
+            # what a depth cap is meant to let you see.
+            children = self.children_of(vm, value)
+            return "[" + ", ".join(self._flatten(vm, c, depth)
+                                   for _, c in children) + "]"
+        if depth >= MAX_STRUCT_DEPTH:
+            return f"<{value.object_name} at {value.address}>"
+        children = self.children_of(vm, value)
+        rendered = [self._flatten(vm, child, depth + 1) for _, child in children]
+        if value.kind is ValueKind.VARIANT:
+            return f"{value.object_name}(" + ", ".join(rendered) + ")"
+        named = (f"{name}: {text}"
+                 for (name, _), text in zip(children, rendered))
+        return f"{value.object_name} {{ " + ", ".join(named) + " }"
 
     def _layout_at(self, vm: QuinVM, ref: int):
         """The struct layout of the object at `ref`, read from its heap header

@@ -16,11 +16,13 @@ import unittest
 
 from compiler.bytecode import SourceMapBuilder
 from runtime.debugger import (
+    MAX_STRUCT_DEPTH,
     Debugger,
     DebuggerError,
     Mode,
     ResumeNotChosen,
     StopReason,
+    ValueKind,
 )
 from runtime.vm import VMError
 from tests.harness import (
@@ -411,6 +413,110 @@ class TestValueInspection(QuinTestCase):
         v = self.values(source, 6)
         self.assertIn("Node", v["a"], "it still describes what it can")
         self.assertLess(len(v["a"]), 400, "expansion must stop, not recur forever")
+
+
+class TestValueDescription(QuinTestCase):
+    """The structured form both front ends read.
+
+    `format_local` flattens it for a terminal; the adapter hands out a handle
+    and expands one level per click. The two must not drift, so what is pinned
+    here is that they describe the same value.
+    """
+
+    def describe(self, source: str, target, name: str):
+        dbg, vm, frames = at_breakpoint(source, target)
+        info = dbg.lookup_name(frames[0], name)[0]
+        return dbg, vm, dbg.describe_local(vm, frames[0], info)
+
+    def test_a_struct_elides_its_children_in_the_summary(self):
+        dbg, vm, value = self.describe(TYPES, 11, "p")
+        self.assertEqual(value.kind, ValueKind.STRUCT)
+        self.assertEqual(value.summary, "Point {\u2026}")
+        self.assertEqual(value.type_name, "Point")
+        self.assertTrue(value.expandable)
+
+    def test_children_are_one_level_and_named(self):
+        dbg, vm, value = self.describe(TYPES, 11, "p")
+        children = dbg.children_of(vm, value)
+        self.assertEqual([name for name, _ in children], ["x", "y", "tag"])
+        self.assertEqual([v.summary for _, v in children], ["3", "-4", '"origin"'])
+
+    def test_a_scalar_has_nothing_to_expand(self):
+        dbg, vm, value = self.describe(TYPES, 11, "f")
+        self.assertEqual(value.kind, ValueKind.SCALAR)
+        self.assertFalse(value.expandable)
+        self.assertEqual(dbg.children_of(vm, value), [])
+
+    def test_an_array_reads_its_elements_eagerly(self):
+        # Its summary is the elements, so there is nothing to defer.
+        dbg, vm, value = self.describe(TYPES, 11, "arr")
+        self.assertEqual(value.summary, "[0, 7, 0]")
+        self.assertEqual([name for name, _ in dbg.children_of(vm, value)],
+                         ["[0]", "[1]", "[2]"])
+
+    def test_a_variant_payload_is_numbered_not_named(self):
+        # Its fields are called _0 and _1, and nothing in the language can name
+        # one, so it reads like an array element instead.
+        source = """
+        enum Shape { Circle(int), Blank }
+        fn main(): int {
+            let s: Shape = Shape::Circle(9);
+            let b: Shape = Shape::Blank;
+            return 0;
+        }
+        """
+        dbg, vm, value = self.describe(source, 6, "s")
+        self.assertEqual(value.kind, ValueKind.VARIANT)
+        self.assertEqual(value.summary, "Shape::Circle(\u2026)")
+        self.assertEqual(value.type_name, "Shape", "the enum, not the variant")
+        self.assertEqual([(n, v.summary) for n, v in dbg.children_of(vm, value)],
+                         [("[0]", "9")])
+
+    def test_a_variant_with_no_payload_has_nothing_inside(self):
+        source = """
+        enum Shape { Circle(int), Blank }
+        fn main(): int {
+            let b: Shape = Shape::Blank;
+            return 0;
+        }
+        """
+        dbg, vm, value = self.describe(source, 5, "b")
+        self.assertEqual(value.summary, "Shape::Blank")
+        self.assertFalse(value.expandable)
+
+
+CYCLE = """
+struct Node { value: int, next: Node }
+fn main(): int {
+    let a: Node = Node { value: 1, next: null };
+    let b: Node = Node { value: 2, next: a };
+    a.next = b;
+    return 0;
+}
+"""
+
+
+class TestCyclicValues(QuinTestCase):
+    def test_the_flat_form_stops_at_the_depth_cap(self):
+        dbg, vm, frames = at_breakpoint(CYCLE, 7)
+        info = dbg.lookup_name(frames[0], "a")[0]
+        text = dbg.format_local(vm, frames[0], info)
+        self.assertEqual(text.count("Node {"), MAX_STRUCT_DEPTH,
+                         "without a cap it would not return")
+        self.assertIn("<Node at ", text)
+
+    def test_expanding_one_level_at_a_time_never_recurses(self):
+        # The same ring, walked by a front end that drives expansion. There is
+        # no depth to cap because nothing here calls itself.
+        dbg, vm, frames = at_breakpoint(CYCLE, 7)
+        info = dbg.lookup_name(frames[0], "a")[0]
+        value = dbg.describe_local(vm, frames[0], info)
+        seen = []
+        for _ in range(2 * MAX_STRUCT_DEPTH):
+            children = dict(dbg.children_of(vm, value))
+            seen.append(children["value"].summary)
+            value = children["next"]
+        self.assertEqual(seen, ["1", "2"] * MAX_STRUCT_DEPTH)
 
 
 class TestFaultPostMortem(QuinTestCase):

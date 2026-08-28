@@ -18,11 +18,13 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from collections import Counter
 from typing import Any, Dict, Iterator, List, Optional
 
 from compiler.driver_vm import process_exit_code
 from compiler.pipeline import CompileError, compile_path, describe_error
 from dap.protocol import MessageStream, ProtocolError, event, response
+from dap.values import Handles, variable
 from runtime.debugger import (Breakpoint, Debugger, DebuggerError, Mode, Quit,
                               Stop, StopReason)
 from runtime.vm import QuinVM, VMError
@@ -227,6 +229,8 @@ class DebugSession:
         self._next_breakpoint_id = 1
         self._hit_ids: Dict[int, List[int]] = {}
 
+        self._handles = Handles()
+
     # -- the loop --------------------------------------------------------
 
     def serve(self) -> None:
@@ -330,6 +334,90 @@ class DebugSession:
         self.reply(request)
         self._start_if_ready()
 
+    def _on_stackTrace(self, request) -> None:
+        if not self._require_suspended(request):
+            return
+        args = request.get("arguments") or {}
+        frames = self._debugger.frames(self._vm)
+        start = int(args.get("startFrame") or 0)
+        levels = int(args.get("levels") or 0)
+        window = frames[start:start + levels] if levels else frames[start:]
+        self.reply(request, {
+            "stackFrames": [self._stack_frame(view) for view in window],
+            # The untruncated count, so a client that paged knows there is more.
+            "totalFrames": len(frames),
+        })
+
+    def _on_scopes(self, request) -> None:
+        """One scope per frame: QuinLang has no globals and no closures."""
+        if not self._require_suspended(request):
+            return
+        entry = self._handles.get(int((request.get("arguments") or {})
+                                      .get("frameId") or 0))
+        if entry is None or entry[0] != "frame":
+            self.reply(request, success=False, message="unknown frame")
+            return
+        self.reply(request, {"scopes": [{
+            "name": "Locals",
+            "presentationHint": "locals",
+            "variablesReference": self._handles.locals(entry[1]),
+            "expensive": False,
+        }]})
+
+    def _on_variables(self, request) -> None:
+        if not self._require_suspended(request):
+            return
+        reference = int((request.get("arguments") or {})
+                        .get("variablesReference") or 0)
+        entry = self._handles.get(reference)
+        if entry is None:
+            # Either invented, or left over from a previous stop. Both are
+            # answered the same way: the values it named are gone.
+            self.reply(request, success=False,
+                       message="unknown or stale variablesReference")
+            return
+        kind, payload = entry
+        variables = (self._frame_variables(payload) if kind == "locals"
+                     else self._child_variables(payload))
+        self.reply(request, {"variables": variables})
+
+    def _stack_frame(self, view) -> Dict[str, Any]:
+        frame: Dict[str, Any] = {
+            "id": self._handles.frame(view.depth),
+            "name": view.function,
+            # 0 means "no position", which happens for code no statement
+            # produced. Clients handle it; a wrong line would be worse.
+            "line": view.line or 0,
+            "column": view.col or 0,
+        }
+        if view.file:
+            frame["source"] = {"path": view.file, "name": Path(view.file).name}
+        return frame
+
+    def _frame_variables(self, depth: int) -> List[Dict[str, Any]]:
+        frames = self._debugger.frames(self._vm)
+        if depth >= len(frames):
+            return []
+        frame = frames[depth]
+        infos = self._debugger.locals_of(frame)
+        # A shadowed name has two slots and the slot table carries no scope
+        # ranges, so which one is live here is not knowable. Both are shown,
+        # named apart by their slot, rather than one of them guessed at.
+        seen = Counter(info.name for info in infos)
+        variables = []
+        for info in infos:
+            value = self._debugger.describe_local(self._vm, frame, info)
+            shadowed = seen[info.name] > 1
+            variables.append(variable(
+                f"{info.name} (slot {info.slot})" if shadowed else info.name,
+                value, self._handles.value(value),
+                evaluate_name=None if shadowed else info.name))
+        return variables
+
+    def _child_variables(self, value) -> List[Dict[str, Any]]:
+        return [variable(name, child, self._handles.value(child))
+                for name, child in self._debugger.children_of(self._vm, value)]
+
     def _on_setBreakpoints(self, request) -> None:
         """Replace this source's breakpoints with the ones requested.
 
@@ -390,12 +478,17 @@ class DebugSession:
         with a `stopped` event. Holding the response until then would block the
         request loop inside a request, which is the deadlock this whole design
         is arranged to avoid.
+
+        Replying before setting the flag, for the same reason the resume
+        requests reply before releasing: the program can stop between the two,
+        and a `stopped` event that overtakes the response to the request which
+        caused it reads as a stop the client never asked for.
         """
         if self._thread is None or not self._thread.is_alive():
             self.reply(request, success=False, message="no program is running")
             return
-        self._debugger.pause()
         self.reply(request)
+        self._debugger.pause()
 
     def _on_disconnect(self, request) -> None:
         self.reply(request)
@@ -445,6 +538,16 @@ class DebugSession:
             record.reported = body
 
     # -- resuming --------------------------------------------------------
+
+    def _require_suspended(self, request) -> bool:
+        """Inspection reads VM state from this thread, which is safe only while
+        the program's thread is parked. A request that arrives while it runs is
+        refused rather than raced."""
+        with self._condition:
+            suspended = self._suspension is not None
+        if not suspended:
+            self.reply(request, success=False, message="the program is not suspended")
+        return suspended
 
     def _refuse_resume(self) -> Optional[str]:
         """Why the program cannot be resumed right now, or None if it can."""
@@ -533,6 +636,8 @@ class DebugSession:
         with self._condition:
             if self._disconnecting:
                 raise Quit()
+            # Every handle names state that is about to be replaced.
+            self._handles.clear()
             suspension = self._suspension = Suspension(stop)
             # Announced under the condition, so that a resume request arriving
             # the instant the client sees it finds a suspension to write into
