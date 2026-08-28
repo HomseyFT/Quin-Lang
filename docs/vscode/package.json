@@ -1,0 +1,96 @@
+{
+  "name": "quinlang-debug",
+  "displayName": "QuinLang Debug",
+  "description": "Run and debug QuinLang programs.",
+  "version": "0.1.0",
+  "publisher": "quinlang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "quinlang",
+        "aliases": [
+          "QuinLang",
+          "QL"
+        ],
+        "extensions": [
+          ".ql"
+        ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "quinlang"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "quinlang",
+        "label": "QuinLang",
+        "languages": [
+          "quinlang"
+        ],
+        "runtime": "python3",
+        "program": "adapter.py",
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to the .ql file to run.",
+                "default": "${file}"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop before the first statement of main.",
+                "default": false
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments the program reads with argv(n). argv(0) is the program itself.",
+                "default": []
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "quinlang",
+            "request": "launch",
+            "name": "Run the current file",
+            "program": "${file}",
+            "stopOnEntry": false,
+            "args": []
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "QuinLang: run the current file",
+            "description": "Launch the open .ql file under the debugger.",
+            "body": {
+              "type": "quinlang",
+              "request": "launch",
+              "name": "${1:Run the current file}",
+              "program": "^\"\\${file}\"",
+              "stopOnEntry": false,
+              "args": []
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

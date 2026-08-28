@@ -794,6 +794,8 @@ total: int = 14
 
 Values are shown as the language defines them, not as raw words: a negative `int` is signed, a `float` is read from both of its slots, a `str` and a `struct` are followed into the heap, and an array prints its elements. A `struct` expands its fields by name — which is why `StructLayout` carries them — and stops at a fixed depth so a cyclic structure terminates.
 
+The depth cap is a property of the terminal, not of the debugger. `runtime/debugger.py` describes a value once — a summary, a type, and where its children are — and each front end renders it: a terminal has to fit the whole thing on one line, while an editor hands the user an expander and reads one level per click. That is why a cyclic list can be walked forever in an IDE and stops at three levels here.
+
 ### Program output
 
 The VM does not print. It writes to a `ProgramIO`, which defaults to the console so a plain run is unchanged:
@@ -816,7 +818,9 @@ python3 -m dap                 # stdio; the client spawns this
 python3 -m dap --server 4711   # TCP on 127.0.0.1, for an editor that connects
 ```
 
-It runs a program to completion with its output in the debug console and an exit code at the end. Breakpoints and stepping are the next milestones; the state machine underneath is the same `runtime/debugger.py` the terminal client drives.
+Breakpoints by line and by function, stepping, pause, the call stack, locals, struct and array expansion, hover and watch — all of it is the same `runtime/debugger.py` the terminal client drives, so the two front ends cannot disagree about what a variable looks like.
+
+`docs/editors.md` has the setup for each editor. VS Code needs no build step: `docs/vscode/` is a complete extension, and linking it into `~/.vscode/extensions/` is the whole install. `docs/nvim-dap.lua` is a drop-in config for Neovim.
 
 Two decisions in it are worth naming.
 
