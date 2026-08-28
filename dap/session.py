@@ -24,7 +24,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from compiler.driver_vm import process_exit_code
 from compiler.pipeline import CompileError, compile_path, describe_error
 from dap.protocol import MessageStream, ProtocolError, event, response
-from dap.values import Handles, variable
+from dap.values import Handles, evaluation, variable
 from runtime.debugger import (Breakpoint, Debugger, DebuggerError, Mode, Quit,
                               Stop, StopReason)
 from runtime.vm import QuinVM, VMError
@@ -37,7 +37,7 @@ CAPABILITIES = {
     "supportsTerminateRequest": True,
     "supportsCancelRequest": False,
     "supportsFunctionBreakpoints": True,
-    "supportsEvaluateForHovers": False,
+    "supportsEvaluateForHovers": True,
     "supportsSetVariable": False,
     "supportsConditionalBreakpoints": False,
     "supportsHitConditionalBreakpoints": False,
@@ -84,6 +84,14 @@ class Suspension:
     """
     stop: Stop
     resume_mode: Optional[Mode] = None
+
+
+def is_identifier(text: str) -> bool:
+    """The lexer's own rule for a name, so the adapter accepts what the language
+    calls one and nothing else."""
+    if not text or not (text[0].isalpha() or text[0] == "_"):
+        return False
+    return all(c.isalnum() or c == "_" for c in text[1:])
 
 
 def resolved_path(path: str) -> str:
@@ -352,15 +360,14 @@ class DebugSession:
         """One scope per frame: QuinLang has no globals and no closures."""
         if not self._require_suspended(request):
             return
-        entry = self._handles.get(int((request.get("arguments") or {})
-                                      .get("frameId") or 0))
-        if entry is None or entry[0] != "frame":
+        frame = self._frame_for((request.get("arguments") or {}).get("frameId"))
+        if frame is None:
             self.reply(request, success=False, message="unknown frame")
             return
         self.reply(request, {"scopes": [{
             "name": "Locals",
             "presentationHint": "locals",
-            "variablesReference": self._handles.locals(entry[1]),
+            "variablesReference": self._handles.locals(frame.depth),
             "expensive": False,
         }]})
 
@@ -380,6 +387,60 @@ class DebugSession:
         variables = (self._frame_variables(payload) if kind == "locals"
                      else self._child_variables(payload))
         self.reply(request, {"variables": variables})
+
+    def _on_evaluate(self, request) -> None:
+        """A bare variable name, which is what hover and watch ask for.
+
+        Anything else is refused rather than approximated. Evaluating a real
+        expression means compiling a fragment against this frame's scope and
+        running it on the suspended VM without disturbing the operand-stack
+        balance RET checks -- a feature, not a fallback.
+        """
+        if not self._require_suspended(request):
+            return
+        args = request.get("arguments") or {}
+        frame = self._frame_for(args.get("frameId"))
+        if frame is None:
+            self.reply(request, success=False, message="unknown frame")
+            return
+
+        expression = (args.get("expression") or "").strip()
+        if not is_identifier(expression):
+            self.reply(request, success=False,
+                       message="only variable names can be evaluated")
+            return
+
+        matches = self._debugger.lookup_name(frame, expression)
+        if not matches:
+            self.reply(request, success=False,
+                       message=f"no variable named '{expression}' in {frame.function}")
+            return
+        if len(matches) > 1:
+            # Shadowed, and the slot table has no scope ranges to say which one
+            # is live here. The Locals view shows both, named by slot.
+            slots = ", ".join(str(info.slot) for info in matches)
+            self.reply(request, success=False,
+                       message=f"'{expression}' names more than one slot here "
+                               f"({slots}); see Locals")
+            return
+
+        value = self._debugger.describe_local(self._vm, frame, matches[0])
+        self.reply(request, evaluation(value, self._handles.value(value)))
+
+    def _frame_for(self, frame_id) -> Optional[Any]:
+        """The frame a request named, or the innermost one when it named none.
+
+        DAP treats a missing `frameId` as the global scope. QuinLang has no
+        globals, so the innermost frame is the only sensible reading -- and it
+        is what a hover means anyway.
+        """
+        frames = self._debugger.frames(self._vm)
+        if frame_id is None:
+            return frames[0] if frames else None
+        entry = self._handles.get(int(frame_id))
+        if entry is None or entry[0] != "frame" or entry[1] >= len(frames):
+            return None
+        return frames[entry[1]]
 
     def _stack_frame(self, view) -> Dict[str, Any]:
         frame: Dict[str, Any] = {

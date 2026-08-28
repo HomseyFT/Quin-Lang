@@ -77,14 +77,24 @@ def variable(name: str, value: Value, reference: int,
     can evaluate on its own, and offering one that fails when the user adds it
     to a watch list is worse than offering none.
     """
-    body: Dict[str, Any] = {
-        "name": name,
-        "value": value.summary,
-        "type": value.type_name,
-        "variablesReference": reference,
-    }
+    body: Dict[str, Any] = {"name": name, "value": value.summary}
+    body.update(_described(value, reference))
     if evaluate_name:
         body["evaluateName"] = evaluate_name
+    return body
+
+
+def evaluation(value: Value, reference: int) -> Dict[str, Any]:
+    """The same value in the shape `evaluate` answers with: `result` rather than
+    `value`, and no name -- the client knows what it asked about."""
+    body: Dict[str, Any] = {"result": value.summary}
+    body.update(_described(value, reference))
+    return body
+
+
+def _described(value: Value, reference: int) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"type": value.type_name,
+                            "variablesReference": reference}
     if value.kind is ValueKind.ARRAY:
         body["indexedVariables"] = len(value.elements)
     return body

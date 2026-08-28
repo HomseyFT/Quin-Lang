@@ -1,10 +1,11 @@
-"""stackTrace, scopes and variables.
+"""stackTrace, scopes, variables and evaluate.
 
 The shape being tested is DAP's: the client is handed numbers, and every
 further question is asked with one of them. A frame id gets scopes, a scope's
 reference gets variables, and an expandable variable's reference gets one more
 level -- which is what makes a cyclic structure walkable here where the
-terminal front end has to stop at a fixed depth.
+terminal front end has to stop at a fixed depth. `evaluate` is the same values
+reached by name instead, for hover and watch.
 """
 
 import unittest
@@ -245,6 +246,84 @@ class TestShadowing(InspectionTestCase):
         for entry in self.locals_of(client):
             self.assertNotIn("evaluateName", entry,
                              "it would resolve to a guess")
+
+
+class TestEvaluate(InspectionTestCase):
+    """Hover and watch, which is what `evaluate` is for here.
+
+    Bare names only. A real expression means compiling a fragment against the
+    frame's scope and running it on the suspended VM, which is a feature rather
+    than something to approximate.
+    """
+
+    def evaluate(self, client, expression, **arguments):
+        client.send("evaluate", expression=expression, **arguments)
+        return client.wait_for_response("evaluate")
+
+    def test_the_capability_is_declared(self):
+        client = self.connect()
+        client.send("initialize")
+        self.assertTrue(client.wait_for_response("initialize")
+                        ["body"]["supportsEvaluateForHovers"])
+
+    def test_a_name_gives_its_value_and_type(self):
+        client = self.stopped(VALUES, VALUES_LAST_LINE)
+        body = self.evaluate(client, "count")["body"]
+        self.assertEqual(body["result"], "-3")
+        self.assertEqual(body["type"], "int")
+        self.assertEqual(body["variablesReference"], 0)
+
+    def test_an_expandable_value_can_be_expanded_from_a_watch(self):
+        client = self.stopped(VALUES, VALUES_LAST_LINE)
+        body = self.evaluate(client, "head")["body"]
+        self.assertEqual(body["result"], "Node {…}")
+        fields = self.named(self.expand(client, body["variablesReference"]))
+        self.assertEqual(fields["value"]["value"], "1")
+
+    def test_an_array_reports_its_length(self):
+        client = self.stopped(VALUES, VALUES_LAST_LINE)
+        body = self.evaluate(client, "numbers")["body"]
+        self.assertEqual(body["indexedVariables"], 3)
+
+    def test_a_frame_id_picks_which_activation_to_look_in(self):
+        client = self.stopped(NESTED, 2)
+        outer = self.frames(client)["stackFrames"][2]["id"]
+        self.assertEqual(self.evaluate(client, "start", frameId=outer)["body"]["result"],
+                         "4")
+        self.assertFalse(self.evaluate(client, "start")["success"],
+                         "start is not in scope in the innermost frame")
+
+    def test_without_a_frame_id_the_innermost_frame_is_used(self):
+        # DAP means the global scope by that, and QuinLang has none.
+        client = self.stopped(NESTED, 2)
+        self.assertEqual(self.evaluate(client, "n")["body"]["result"], "5")
+
+    def test_an_unknown_name_is_refused(self):
+        client = self.stopped(VALUES, VALUES_LAST_LINE)
+        reply = self.evaluate(client, "nosuchthing")
+        self.assertFalse(reply["success"])
+        self.assertIn("no variable named", reply["message"])
+
+    def test_anything_that_is_not_a_name_is_refused(self):
+        client = self.stopped(VALUES, VALUES_LAST_LINE)
+        for expression in ("count + 1", "head.value", "1", "", "count()"):
+            reply = self.evaluate(client, expression)
+            self.assertFalse(reply["success"], expression)
+            self.assertIn("only variable names", reply["message"])
+
+    def test_a_shadowed_name_is_refused_rather_than_guessed(self):
+        client = self.stopped(SHADOWED, 5)
+        reply = self.evaluate(client, "x")
+        self.assertFalse(reply["success"])
+        self.assertIn("more than one slot", reply["message"])
+
+    def test_it_is_refused_while_the_program_runs(self):
+        client = self.client(SPINNING)
+        client.wait_for(lambda m: m["type"] == "event" and m["event"] == "output"
+                        and "running" in m["body"]["output"], "the program to start")
+        reply = self.evaluate(client, "x")
+        self.assertFalse(reply["success"])
+        self.assertIn("not suspended", reply["message"])
 
 
 class TestHandles(InspectionTestCase):
