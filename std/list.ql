@@ -169,3 +169,53 @@ fn list_println(head: IntList): void {
     list_print(head);
     println("");
 }
+
+// The three below take a function as an argument. Everything above fixes its
+// operation at the call site; these let the caller supply it, which is what a
+// function value is for. Each builds forward with a tail pointer rather than
+// prepending and reversing, so it allocates one node per element.
+
+// A new list holding f applied to each element, in the same order.
+fn list_map(head: IntList, f: fn(int): int): IntList {
+    if (head == null) {
+        return null;
+    }
+    let out: IntList = IntList { value: f(head.value), next: null };
+    let tail: IntList = out;
+    let cur: IntList = head.next;
+    while (cur != null) {
+        tail.next = IntList { value: f(cur.value), next: null };
+        tail = tail.next;
+        cur = cur.next;
+    }
+    return out;
+}
+
+// A new list of the elements keep() accepts, in the same order.
+fn list_filter(head: IntList, keep: fn(int): bool): IntList {
+    let out: IntList = null;
+    let tail: IntList = null;
+    let cur: IntList = head;
+    while (cur != null) {
+        if (keep(cur.value)) {
+            let node: IntList = IntList { value: cur.value, next: null };
+            if (out == null) {
+                out = node;
+            } else {
+                tail.next = node;
+            }
+            tail = node;
+        }
+        cur = cur.next;
+    }
+    return out;
+}
+
+// f applied to each element for its effect. Allocates nothing.
+fn list_foreach(head: IntList, f: fn(int): void): void {
+    let cur: IntList = head;
+    while (cur != null) {
+        f(cur.value);
+        cur = cur.next;
+    }
+}

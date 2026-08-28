@@ -73,6 +73,21 @@ class TestRoundTrip(RoundTripTestCase):
         self.assertEqual([i.arg for i in back.code if i.op is OpCode.PUSH_FLOAT],
                          [i.arg for i in floats])
 
+    def test_function_values_survive_the_round_trip(self):
+        # Nothing in the format needed a version bump for these: an opcode is
+        # an opcode, and a type name was already a string. This is what proves
+        # it.
+        program, back = self.round_trip(
+            "fn add(a: int, b: int): int { return a + b; }\n"
+            "fn main(): int { let f: fn(int, int): int = add;"
+            " println(f(1, 2)); return 0; }")
+        self.assertIn(OpCode.CALL_INDIRECT, [i.op for i in back.code])
+        self.assertEqual(back.code, program.code)
+        types = {l.name: l.type_name
+                 for f in back.functions if f.name == "main"
+                 for l in f.locals_}
+        self.assertEqual(types["f"], "fn(int,int):int")
+
     def test_the_string_table_keeps_its_ids(self):
         # LOAD_STR names a literal by id, so position is not enough.
         program, back = self.round_trip()

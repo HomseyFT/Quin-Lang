@@ -94,6 +94,7 @@ FROZEN = {
     "READ_LINE": 76,
     "ARGC": 77,
     "ARGV": 78,
+    "CALL_INDIRECT": 79,
 }
 
 # Numbers of opcodes that once existed and were removed. A retired number is

@@ -354,6 +354,22 @@ class TestValueInspection(QuinTestCase):
         self.assertEqual((v["a"], v["b"]), ("1.5", "2.25"),
                          "reading one slot would truncate to the low half")
 
+    def test_a_function_value_reads_as_the_function_it_names(self):
+        # The slot holds an index; showing the number would be technically
+        # true and useless.
+        source = """
+        fn add(a: int, b: int): int { return a + b; }
+        struct Op { apply: fn(int, int): int }
+        fn main(): int {
+            let f: fn(int, int): int = add;
+            let o: Op = Op { apply: add };
+            return 0;
+        }
+        """
+        v = self.values(source, 7)
+        self.assertEqual(v["f"], "add")
+        self.assertIn("apply: add", v["o"])
+
     def test_a_parameter_is_marked_as_one(self):
         dbg, _, frames = at_breakpoint(CALLS, "add")
         kinds = {li.name: li.is_param for li in dbg.locals_of(frames[0])}
