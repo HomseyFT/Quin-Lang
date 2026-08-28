@@ -428,6 +428,24 @@ class DapTestCase(unittest.TestCase):
         path.write_text(source, encoding="utf-8")
         return str(path)
 
+    def write_program_behind_a_symlink(self, source: str) -> str:
+        """The same file, named through a symlinked directory.
+
+        A path the client sends and the resolved one then differ, which is the
+        ordinary case on macOS -- /tmp is /private/tmp -- and on any checkout
+        reached through a link. Skips where symlinks need a privilege we may
+        not have, which on Windows is the default.
+        """
+        real = self.write_program(source)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        link = Path(directory.name) / "link"
+        try:
+            link.symlink_to(Path(real).parent, target_is_directory=True)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest(f"symlinks unavailable: {e}")
+        return str(link / "main.ql")
+
     def connect(self) -> LiveClient:
         """An initialized client with nothing launched yet."""
         client = LiveClient()

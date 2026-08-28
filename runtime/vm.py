@@ -330,6 +330,11 @@ class QuinVM:
         `std/math.ql` -- and absolute otherwise, since a file outside the tree
         relativises to a chain of `..` that is longer and harder to read than
         the real path.
+
+        The relative form is spelled with `/`, the way the include that named
+        the file is written, so a backtrace reads the same on every platform.
+        The absolute form is returned untouched: it is an OS path, not one
+        QuinLang made up.
         """
         if not path:
             return ""
@@ -337,7 +342,9 @@ class QuinVM:
             relative = os.path.relpath(path, os.getcwd())
         except ValueError:            # a different drive on Windows
             return path
-        return relative if len(relative) <= len(path) else path
+        if len(relative) > len(path):
+            return path
+        return relative.replace(os.sep, "/")
 
     def _locate(self, error: VMError) -> VMError:
         """The same error, saying where it happened."""

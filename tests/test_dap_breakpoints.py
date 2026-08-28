@@ -214,6 +214,15 @@ class TestFunctionBreakpoints(BreakpointTestCase):
         self.configuration_done(client)
         self.assertStopped(client, "breakpoint")
 
+    def test_the_file_it_lands_in_is_named_as_the_client_named_it(self):
+        # A function breakpoint names no file, so the one reported back comes
+        # from the resolver -- the one spelling the client did not choose.
+        client = self.connect()
+        client.program_path = self.write_program_behind_a_symlink(COUNTER)
+        self.launch(client)
+        reported = self.set_function_breakpoints(client, "tick")
+        self.assertEqual(reported[0]["source"]["path"], client.program_path)
+
     def test_an_unknown_name_is_unverified(self):
         client = self.client(COUNTER, launch=False)
         self.launch(client)

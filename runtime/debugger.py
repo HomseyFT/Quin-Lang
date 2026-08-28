@@ -18,6 +18,7 @@ in the runtime package beside the VM rather than beside the compiler.
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -38,6 +39,12 @@ from runtime.vm import (
 # How deep a struct is expanded before it is shown as a bare address. A linked
 # list is the ordinary case, and without a limit a cyclic one would not return.
 MAX_STRUCT_DEPTH = 3
+
+
+def _slashed(path: str) -> str:
+    """A path spelled the way an include is. Only the native separator is
+    replaced, so a Linux file whose name really contains a backslash survives."""
+    return path.replace(os.sep, "/")
 
 
 class DebuggerError(Exception):
@@ -212,10 +219,17 @@ class Debugger:
 
     def _functions_in_file(self, wanted: str) -> List[int]:
         """Every function declared in `wanted`, matched by path suffix so that
-        `math.ql`, `std/math.ql` and the absolute path all name the same file."""
+        `math.ql`, `std/math.ql` and the absolute path all name the same file.
+
+        Both sides are spelled with `/` first. `source_file` holds a native OS
+        path -- it is handed to editors and opened -- but an include is written
+        `std/math.ql` on every platform, so on Windows the two disagree about
+        the separator and nothing would ever match.
+        """
+        wanted = _slashed(wanted)
         matches = []
         for i, fn in enumerate(self.functions):
-            path = fn.source_file
+            path = _slashed(fn.source_file)
             if path == wanted or path.endswith("/" + wanted.lstrip("./")):
                 matches.append(i)
         return matches

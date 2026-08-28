@@ -108,6 +108,18 @@ class TestStackTrace(InspectionTestCase):
         self.assertEqual(innermost["source"]["path"], client.program_path)
         self.assertEqual(innermost["source"]["name"], "main.ql")
 
+    def test_a_frame_is_named_the_way_the_client_named_the_file(self):
+        # The resolver canonicalises, so under a symlink the path it stamps is
+        # not the one the client opened. Reporting that one makes the editor
+        # open a second tab for the same file, with none of the markers.
+        client = self.connect()
+        client.program_path = self.write_program_behind_a_symlink(NESTED)
+        self.launch(client, stop_on_entry=True)
+        self.configuration_done(client)
+        self.assertStopped(client, "entry")
+        innermost = self.frames(client)["stackFrames"][0]
+        self.assertEqual(innermost["source"]["path"], client.program_path)
+
     def test_paging_reports_the_untruncated_count(self):
         client = self.stopped(NESTED, 2)
         page = self.frames(client, startFrame=1, levels=1)

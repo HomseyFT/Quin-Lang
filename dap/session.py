@@ -19,7 +19,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from collections import Counter
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from compiler.driver_vm import process_exit_code
 from compiler.pipeline import CompileError, describe_error, program_for
@@ -145,7 +145,7 @@ class ClientBreakpoint:
         self.resolved_file, self.resolved_line, self.message = bp.file, bp.line, ""
         return bp
 
-    def body(self) -> Dict[str, Any]:
+    def body(self, source: Callable[[str], Dict[str, str]]) -> Dict[str, Any]:
         """The DAP `Breakpoint`.
 
         `line` is the resolved one, which is the point: `break_at_line` walks
@@ -159,11 +159,17 @@ class ClientBreakpoint:
             body["message"] = self.message
         if self.function is not None:
             if verified:
-                body["source"] = {"path": self.resolved_file}
+                # A function breakpoint names no file, so which one it landed
+                # in is only known after resolving -- and that is the resolver's
+                # spelling, which the client may not share.
+                body["source"] = source(self.resolved_file)
                 body["line"] = self.resolved_line
             return body
         body["line"] = self.resolved_line if verified else self.line
-        body["source"] = {"path": self.client_path}
+        # Exactly the path the client sent, not a lookup: this record is the
+        # one place it is known for certain.
+        body["source"] = {"path": self.client_path,
+                          "name": Path(self.client_path).name}
         return body
 
 
@@ -236,6 +242,9 @@ class DebugSession:
         self._function_breakpoints: List[ClientBreakpoint] = []
         self._next_breakpoint_id = 1
         self._hit_ids: Dict[int, List[int]] = {}
+
+        # Resolved path -> the spelling the client used for it. See _source.
+        self._client_paths: Dict[str, str] = {}
 
         self._handles = Handles()
 
@@ -311,6 +320,10 @@ class DebugSession:
         if not program_path:
             self.reply(request, success=False, message="launch needs a 'program' path")
             return
+
+        # Before compiling, so that even a program that fails to compile is
+        # reported back under the name the client launched it by.
+        self._remember_path(program_path)
 
         try:
             # Either a .ql source or a .qlc that kept its debug tables. A
@@ -454,7 +467,7 @@ class DebugSession:
             "column": view.col or 0,
         }
         if view.file:
-            frame["source"] = {"path": view.file, "name": Path(view.file).name}
+            frame["source"] = self._source(view.file)
         return frame
 
     def _frame_variables(self, depth: int) -> List[Dict[str, Any]]:
@@ -496,7 +509,7 @@ class DebugSession:
                        message="setBreakpoints needs a source path")
             return
 
-        path = resolved_path(client_path)
+        path = self._remember_path(client_path)
         wanted = args.get("breakpoints") or []
         records = [ClientBreakpoint(id=self._new_breakpoint_id(),
                                     client_path=client_path, path=path,
@@ -504,7 +517,8 @@ class DebugSession:
                    for want in wanted]
         self._source_breakpoints[path] = records
         self._rebuild_breakpoints()
-        self.reply(request, {"breakpoints": [r.body() for r in records]})
+        self.reply(request,
+                   {"breakpoints": [r.body(self._source) for r in records]})
 
     def _on_setFunctionBreakpoints(self, request) -> None:
         args = request.get("arguments") or {}
@@ -515,7 +529,8 @@ class DebugSession:
         ]
         self._rebuild_breakpoints()
         self.reply(request,
-                   {"breakpoints": [r.body() for r in self._function_breakpoints]})
+                   {"breakpoints": [r.body(self._source)
+                                    for r in self._function_breakpoints]})
 
     def _on_threads(self, request) -> None:
         self.reply(request, dict(THREADS))
@@ -561,6 +576,30 @@ class DebugSession:
         self.reply(request)
         self._end_session()
 
+    # -- source files ----------------------------------------------------
+
+    def _source(self, path: str) -> Dict[str, str]:
+        """A DAP `Source` for a file, named the way the client names it.
+
+        Editors key open documents by path, so a frame or a breakpoint reported
+        at `/private/var/...` when the user opened `/var/...` is a second
+        document as far as the client is concerned: it opens a duplicate tab and
+        the markers in the first one do not move. The resolver deliberately
+        canonicalises -- that is what makes two spellings of one file comparable
+        -- so the spelling the client used is remembered alongside and handed
+        back here.
+
+        A file the client never named -- anything under `std/`, reached by an
+        include -- has no other spelling, and the resolved path is the answer.
+        """
+        return {"path": self._client_paths.get(path, path),
+                "name": Path(path).name}
+
+    def _remember_path(self, client_path: str) -> str:
+        resolved = resolved_path(client_path)
+        self._client_paths[resolved] = client_path
+        return resolved
+
     # -- breakpoints -----------------------------------------------------
 
     def _new_breakpoint_id(self) -> int:
@@ -593,7 +632,7 @@ class DebugSession:
                     self._hit_ids.setdefault(bp.id, []).append(record.id)
 
         for record in self._breakpoint_records():
-            body = record.body()
+            body = record.body(self._source)
             # Only news is worth an event, and only for one the client has
             # already been told about: the rest travel in the response.
             if record.reported is not None and record.reported != body:
