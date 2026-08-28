@@ -1,7 +1,8 @@
 import argparse
 import os
 from pathlib import Path
-from .pipeline import CompileError, compile_path, describe_error
+from .pipeline import CompileError, describe_error, program_for
+from .serialize import write_program
 from .debug import debug
 from runtime.vm import QuinVM, VMError
 import sys
@@ -37,9 +38,15 @@ def process_exit_code(value: int) -> int:
 
 def main():
     ap = argparse.ArgumentParser(description="QuinLang VM compiler/executor")
-    ap.add_argument("source", type=Path, help="Source .ql file")
+    ap.add_argument("source", type=Path, help="a .ql source or .qlc bytecode file")
     ap.add_argument("--debug", action="store_true",
                     help="run under the interactive debugger")
+    ap.add_argument("-o", "--emit", type=Path, metavar="FILE",
+                    help="compile to a .qlc bytecode file instead of running")
+    ap.add_argument("--strip", action="store_true",
+                    help="omit debug info from --emit: no source map, local "
+                         "names or file names, so a runtime error keeps its "
+                         "message but loses its line numbers")
     # Everything after the source file belongs to the program, not to us, so a
     # program may take a --flag of its own without this parser claiming it.
     ap.add_argument("program_args", nargs=argparse.REMAINDER,
@@ -48,7 +55,7 @@ def main():
     args = ap.parse_args()
 
     try:
-        program, warnings = compile_path(args.source)
+        program, warnings = program_for(args.source)
     except CompileError as e:
         print(describe_error(e), file=sys.stderr)
         sys.exit(EXIT_COMPILE_ERROR)
@@ -57,6 +64,16 @@ def main():
     # the exit code nor whether the program runs.
     for warning in warnings:
         print(f"Warning: {warning}", file=sys.stderr)
+
+    if args.emit is not None:
+        write_program(program, args.emit, debug=not args.strip)
+        sys.exit(0)
+
+    if args.debug and not program.source_map.pcs:
+        # Stepping through a program with no line numbers is not debugging.
+        print("This program carries no debug info; recompile it from source.",
+              file=sys.stderr)
+        sys.exit(EXIT_COMPILE_ERROR)
 
     # argv(0) is the program, as in C. The values are re-read as bytes so a
     # non-ASCII argument arrives one byte per character, which is what a str

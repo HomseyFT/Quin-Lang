@@ -22,7 +22,7 @@ from collections import Counter
 from typing import Any, Dict, Iterator, List, Optional
 
 from compiler.driver_vm import process_exit_code
-from compiler.pipeline import CompileError, compile_path, describe_error
+from compiler.pipeline import CompileError, describe_error, program_for
 from dap.protocol import MessageStream, ProtocolError, event, response
 from dap.values import Handles, evaluation, variable
 from runtime.debugger import (Breakpoint, Debugger, DebuggerError, Mode, Quit,
@@ -313,7 +313,9 @@ class DebugSession:
             return
 
         try:
-            program, warnings = compile_path(Path(program_path), self.std_path)
+            # Either a .ql source or a .qlc that kept its debug tables. A
+            # stripped one loads and runs, with no lines to stop on.
+            program, warnings = program_for(Path(program_path), self.std_path)
         except CompileError as e:
             text = describe_error(e)
             # Both channels: the response is what the client reports, the

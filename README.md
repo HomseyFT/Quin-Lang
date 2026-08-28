@@ -43,7 +43,7 @@ python3 -m compiler.driver_vm examples/vm_test.ql
 # -> 42
 ```
 
-The driver lexes, resolves `include`s, type-checks, compiles to bytecode, and runs it in-process. Compile errors are reported as `Import error:`, `Semantic error:`, or `Codegen error:` with a `[line:col]` prefix. Runtime faults come out as `Runtime error:` and carry the same `[line:col]`, the function they happened in, and a backtrace — see [Runtime errors](#runtime-errors). Add `--debug` to run the program under the [debugger](#debugger) instead.
+The driver lexes, resolves `include`s, type-checks, compiles to bytecode, and runs it in-process — or loads an already-compiled [`.qlc`](#compiled-bytecode-files). Compile errors are reported as `Import error:`, `Semantic error:`, or `Codegen error:` with a `[line:col]` prefix. Runtime faults come out as `Runtime error:` and carry the same `[line:col]`, the function they happened in, and a backtrace — see [Runtime errors](#runtime-errors). Add `--debug` to run the program under the [debugger](#debugger) instead.
 
 A larger tour of arrays, pointers, printing, and boolean logic:
 
@@ -893,6 +893,32 @@ The rules, enforced by `tests/test_opcodes.py`:
 - `0` is not an opcode, so a format can use it as a terminator or an absent-marker.
 
 The test pins every name to its number and fails on a renumber, a reorder, a reuse, or a return to `auto()`. Adding an opcode asks you to record it, which is the moment to notice the format grew.
+
+### Compiled bytecode files
+
+`-o` writes the compiled program to a `.qlc` instead of running it, and a `.qlc` runs wherever a `.ql` does:
+
+```bash
+python3 -m compiler.driver_vm -o prog.qlc prog.ql   # compile
+python3 -m compiler.driver_vm prog.qlc              # run, no source needed
+python3 -m compiler.driver_vm -o prog.qlc --strip prog.ql
+```
+
+Flags go **before** the source file: everything after it is the program's own `argv`, which is what lets a program take a `--flag` of its own.
+
+Which file you handed it is decided by the file's first bytes, not its name. What a file *is* is not the caller's to guess from a suffix, and a `.qlc` renamed to `.ql` would otherwise reach the lexer and be reported as a syntax error in binary data.
+
+**A `.qlc` is a build artifact, not an archive format.** The header stamps a format version and the loader refuses any other, the way a `.pyc` refuses a foreign magic. That refusal is what keeps the tables underneath free to move: promise that an old file still loads and the opcode numbering, the struct encoding and the debug tables all become frozen public surface, with a migration path owed on every change. Refusing costs one line telling you to recompile — and loosening that later is easy, where tightening it would not be.
+
+`--strip` leaves out what only a reader of source needs: the source map, the local-name tables, and the file each function came from. It cuts a file to roughly a third, and it costs more than the debugger — a runtime error keeps its message but loses its `[line:col]` and the line numbers in its backtrace:
+
+```
+Runtime error: [2:14] in risky: Division by zero      Runtime error: in risky: Division by zero
+  at risky (line 2)                                     at risky
+  at main  (line 5)                                     at main
+```
+
+So it is opt-in. Function names stay either way; a backtrace naming no functions is not worth the bytes. `--debug` on a stripped program is refused rather than started, because stepping through code with no line numbers is not debugging.
 
 ### QuinVM bytecode
 

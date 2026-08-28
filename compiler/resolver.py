@@ -62,6 +62,11 @@ class ImportResolver:
             src_text = file_path.read_text(encoding="utf-8")
         except IOError as e:
             raise ResolveError(f"Cannot read file {file_path}: {e}")
+        except UnicodeDecodeError:
+            # Source is text. Something binary reaches here by being named on
+            # the command line -- a .qlc with the wrong magic, an image -- and
+            # a decode traceback tells the user nothing about which file.
+            raise ResolveError(f"Not a text file: {file_path}")
 
         try:
             tokens = Lexer(src_text).tokenize()
