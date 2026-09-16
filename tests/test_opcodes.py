@@ -99,6 +99,14 @@ FROZEN = {
     "ARRAY_LEN": 81,
     "ARRAY_GET": 82,
     "ARRAY_SET": 83,
+    "FILE_READ": 84,
+    "FILE_WRITE": 85,
+    "FILE_APPEND": 86,
+    "FILE_EXISTS": 87,
+    "FILE_DELETE": 88,
+    "FILE_ERROR": 89,
+    "FILE_READ_BYTES": 90,
+    "FILE_WRITE_BYTES": 91,
 }
 
 # Numbers of opcodes that once existed and were removed. A retired number is

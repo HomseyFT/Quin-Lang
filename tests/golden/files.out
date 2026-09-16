@@ -1,0 +1,20 @@
+-- writing --
+write : Ok(11)
+append: Ok(12)
+true
+-- reading --
+first line
+second line
+23
+-- bytes --
+bytes : Ok(3)
+3
+81
+-- failing --
+read failed, and we are still here
+(a default)
+false
+-- cleaning up --
+delete: Ok(0)
+false
+true

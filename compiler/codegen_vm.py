@@ -1163,6 +1163,28 @@ class CodeGenVM:
             self._emit_expr(e.args[0], layout, ctx)
             self.code.append(Instruction(OpCode.ARGV))
             return
+        # Files. Each is arguments in source order then the opcode, which is
+        # every builtin's default shape; they are listed rather than handled
+        # generically because the table above says nothing about which opcode
+        # a name lowers to, and a table that could fall out of step with
+        # codegen is the thing bytecode.py exists to avoid.
+        file_ops = {
+            "file_read": (OpCode.FILE_READ, 1),
+            "file_write": (OpCode.FILE_WRITE, 2),
+            "file_append": (OpCode.FILE_APPEND, 2),
+            "file_exists": (OpCode.FILE_EXISTS, 1),
+            "file_delete": (OpCode.FILE_DELETE, 1),
+            "file_error": (OpCode.FILE_ERROR, 0),
+            "file_read_bytes": (OpCode.FILE_READ_BYTES, 1),
+            "file_write_bytes": (OpCode.FILE_WRITE_BYTES, 2),
+        }
+        if name in file_ops and len(e.args) == file_ops[name][1]:
+            op, _ = file_ops[name]
+            for arg_expr in e.args:
+                self._emit_expr(arg_expr, layout, ctx)
+            self.code.append(Instruction(op))
+            return
+
         if name == "gc" and not e.args:
             self.code.append(Instruction(OpCode.GC))
             self.code.append(Instruction(OpCode.PUSH_INT, 0))  # void result

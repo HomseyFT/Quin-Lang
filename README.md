@@ -51,7 +51,7 @@ A larger tour of arrays, pointers, printing, and boolean logic:
 python3 -m compiler.driver_vm examples/hello.ql
 ```
 
-Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/stdlib.ql` (a tour of the standard library), `examples/generics.ql` (writing generic functions over `Vec<T>`), `examples/arrays.ql` (`Array<T>` and the collector), `examples/strings.ql` (building and inspecting strings), `examples/vm_arrays_push.ql` (`array_push`), `examples/floats.ql` (floats and `std/float.ql`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
+Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/stdlib.ql` (a tour of the standard library), `examples/generics.ql` (writing generic functions over `Vec<T>`), `examples/arrays.ql` (`Array<T>` and the collector), `examples/files.ql` (reading and writing files), `examples/strings.ql` (building and inspecting strings), `examples/vm_arrays_push.ql` (`array_push`), `examples/floats.ql` (floats and `std/float.ql`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
 
 `main`'s return value becomes the process exit code, so a program can be tested from a shell:
 
@@ -121,6 +121,7 @@ fn main(): int {
 | `std/list.ql` | `List<T>`, a persistent singly linked list: `list_push`, `list_of`, `list_len`, `list_get`, `list_try_get`, `list_reverse`, `list_contains`, the same higher-order set, and `list_sum` / `list_max` / `list_min` over `List<int>` |
 | `std/option.ql` | `Option<T>`: `option_is_some`, `option_is_none`, `option_unwrap`, `option_unwrap_or`, `option_map`, `option_show` |
 | `std/result.ql` | `Result<T, E>`: `result_is_ok`, `result_is_err`, `result_unwrap`, `result_unwrap_or`, `result_map`, `result_ok` / `result_err` into an `Option`, `result_show` |
+| `std/fs.ql` | `fs_read`, `fs_write`, `fs_append`, `fs_read_bytes` / `fs_write_bytes`, `fs_delete` as `Result`s, plus `fs_exists` and `fs_read_or` |
 | `std/float.ql` | `fabs`, `fmin`, `fmax`, `fsign`, `floor`, `ceil`, `round`, `ftrunc`, `fpow`, `fclose` |
 | `std/prelude.ql` | Includes the three function-only modules above, so one include brings in the common helpers |
 
@@ -685,6 +686,41 @@ Arguments come through `argc()` and `argv(i)`. `argc()` counts what the host sup
 python3 -m compiler.driver_vm prog.ql --verbose input.txt
 ```
 
+### Files
+
+```quin
+include "std/fs.ql";
+
+fn main(): int {
+    match (fs_read("config.txt")) {
+        Result::Ok(text)  => { print(text); }
+        Result::Err(why)  => { println("could not read it: " + why); }
+    }
+    return 0;
+}
+```
+
+The builtins underneath are **total**: none of them faults. `file_read` returns `""` whether the file was empty or unreadable, `file_write` returns whether it worked, and `file_error()` says what went wrong — the empty string if nothing did. A failed read leaves the program running and lets it decide.
+
+That is the same bargain `read_line` makes by returning `""` at end of input, and it is right for a primitive and wrong for a program, so `std/fs.ql` turns the convention into a `Result` exactly as `std/input.ql` turns `read_line`'s into an `enum`.
+
+| Builtin | Does |
+| --- | --- |
+| `file_read(path): str` | The whole file. `""` on failure. |
+| `file_write(path, contents): bool` | Replace the file's contents. |
+| `file_append(path, contents): bool` | Add to the end, creating the file if needed. |
+| `file_exists(path): bool` | Whether a readable file is there. Never an error — not existing is an answer. |
+| `file_delete(path): bool` | Remove it. |
+| `file_error(): str` | Why the last operation failed, or `""`. Cleared at the start of every file operation, so a stale one is never read as a fresh failure. |
+| `file_read_bytes(path): Array<int>` | The file as one element per byte. |
+| `file_write_bytes(path, data): bool` | Write an `Array<int>`. An element outside `0..255` is a runtime fault. |
+
+Content is **bytes**, like everything else a `str` holds: a file of arbitrary bytes round-trips unchanged, with no decoding step and none of its failure modes.
+
+**Where files come from is not the interpreter's business.** The VM reaches the filesystem through the same `ProgramIO` object output goes to, so an embedder supplies its own — a virtual tree, a sandbox that refuses everything by raising `OSError`, or an in-memory dictionary. That last one is what the test suite uses, which is why `tests/test_files.py` exercises the whole path without touching a disk or cleaning up after itself.
+
+Running out of heap is still a fault, not a reported failure: that is the allocator failing rather than the file, and `file_read_bytes` on a file larger than the 64 KiB heap says so.
+
 ### The two address spaces
 
 QuinLang has two kinds of memory, and they are **separate types** so that an address from one cannot be used with the other.
@@ -1177,6 +1213,7 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - A `ptr` does not outlive the frame it points into.
 - Collection is triggered only by allocation pressure or an explicit `gc()`. Every collection moves every surviving object that has somewhere lower to go.
 - `float` is 32-bit single precision, so it carries about seven significant digits. There are no float arrays of either kind — `float[N]` and `Array<float>` are both refused, because a float is two words wide and both arrays count elements. There is no exponent notation in literals, and no `@` on a float.
+- A program can read, write and delete any path the host process can. There is no sandbox in the language; supply a `ProgramIO` that refuses if you need one.
 - A type parameter carries no bounds, so a template's body is checked once per instantiation rather than once at its declaration. An error in a library template points at the library, with the instantiation chain saying which call reached it.
 - Two instantiations of one template are two functions in the compiled program. That is what makes the per-instantiation GC maps possible, and it means code size grows with the number of element types actually used.
 - An `Array<T>` element has no frame address, so `@a[0]` is refused on one. Its length is fixed at construction: growing means building a longer array and copying.

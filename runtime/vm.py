@@ -239,6 +239,10 @@ class QuinVM:
         # is the only way a debug adapter can keep the program's text off the
         # stream its protocol is using.
         self.io: ProgramIO = io or ConsoleIO()
+        # Why the last file operation failed, or "" if it did not. A file
+        # builtin reports rather than faults, so this is how the reason
+        # survives to FILE_ERROR.
+        self.file_error: str = ""
         # The program's arguments. The driver puts the program path first, as
         # C does, but nothing here invents one: an embedded VM supplies what it
         # has, so argc() may legitimately be zero.
@@ -622,6 +626,61 @@ class QuinVM:
                     f"byte; a str holds one byte per character"
                 )
         return self._alloc_string(text.encode("latin-1"))
+
+    # -- files -----------------------------------------------------------
+    #
+    # None of these faults on a filesystem failure. They report it, the way
+    # READ_LINE reports end of input by returning "". Running out of heap is a
+    # different thing and still faults: that is the allocator failing, not the
+    # file.
+
+    def _file_op(self, action):
+        """`(whether it worked, what it returned)`, reporting OSError instead
+        of raising it.
+
+        The reason is cleared before the attempt, so a stale one can never be
+        read back as a fresh failure -- which is the one real hazard of a
+        last-error convention.
+        """
+        self.file_error = ""
+        try:
+            return True, action()
+        except OSError as e:
+            self.file_error = str(e) or e.__class__.__name__
+            return False, None
+
+    def _bytes_from_io(self, value, what: str) -> bytes:
+        """What a ProgramIO handed back, as bytes.
+
+        Text is accepted and checked to fit in bytes, for the same reason
+        read_line's is: the contract has to hold for every implementation, not
+        just the two in this repo.
+        """
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value)
+        if isinstance(value, str):
+            for ch in value:
+                if ord(ch) > 0xFF:
+                    raise VMError(
+                        f"{what} contains U+{ord(ch):04X}, which does not fit "
+                        f"in a byte; a str holds one byte per character")
+            return value.encode("latin-1")
+        raise VMError(f"{what} is {type(value).__name__}, not bytes")
+
+    def _array_bytes(self, ref: int, op_name: str) -> bytes:
+        """An Array<int> read as bytes, refusing an element that is not one."""
+        start, count, holds_refs = self._array_at(ref, op_name)
+        if holds_refs:
+            raise VMError(f"{op_name} needs an array of values, not references")
+        data = bytearray()
+        for index in range(count):
+            word = self._read_word(start + index * 2)
+            if word > 0xFF:
+                raise VMError(
+                    f"{op_name}: element {index} is {to_signed(word)}, outside "
+                    f"the 0..255 a byte holds")
+            data.append(word)
+        return bytes(data)
 
     def _string_bytes(self, addr: int) -> bytes:
         """The characters of the string object at `addr`."""
@@ -1298,6 +1357,51 @@ class QuinVM:
                     )
                 self._push(
                     self._string_from_text(self.args[index], "an argument"), True)
+
+            elif op is OpCode.FILE_READ:
+                path = self._string_text(self._pop())
+                ok, data = self._file_op(lambda: self.io.read_file(path))
+                text = self._bytes_from_io(data, f"'{path}'") if ok else b""
+                self._push(self._alloc_string(text), True)
+
+            elif op is OpCode.FILE_WRITE or op is OpCode.FILE_APPEND:
+                data = self._string_bytes(self._pop())
+                path = self._string_text(self._pop())
+                append = op is OpCode.FILE_APPEND
+                ok, _ = self._file_op(
+                    lambda: self.io.write_file(path, data, append))
+                self._push(1 if ok else 0)
+
+            elif op is OpCode.FILE_EXISTS:
+                path = self._string_text(self._pop())
+                ok, present = self._file_op(lambda: self.io.file_exists(path))
+                self._push(1 if ok and present else 0)
+
+            elif op is OpCode.FILE_DELETE:
+                path = self._string_text(self._pop())
+                ok, _ = self._file_op(lambda: self.io.delete_file(path))
+                self._push(1 if ok else 0)
+
+            elif op is OpCode.FILE_ERROR:
+                self._push(
+                    self._string_from_text(self.file_error, "a file error"), True)
+
+            elif op is OpCode.FILE_READ_BYTES:
+                path = self._string_text(self._pop())
+                ok, data = self._file_op(lambda: self.io.read_file(path))
+                content = self._bytes_from_io(data, f"'{path}'") if ok else b""
+                # A value array: bytes are ints, so nothing here is traced.
+                ref = self._alloc_array(len(content), False)
+                for index, byte in enumerate(content):
+                    self._write_word(ref + index * 2, byte)
+                self._push(ref, True)
+
+            elif op is OpCode.FILE_WRITE_BYTES:
+                data = self._array_bytes(self._pop(), "file_write_bytes")
+                path = self._string_text(self._pop())
+                ok, _ = self._file_op(
+                    lambda: self.io.write_file(path, data, False))
+                self._push(1 if ok else 0)
 
             elif op is OpCode.GC:
                 self.collect()

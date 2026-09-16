@@ -156,6 +156,19 @@ class OpCode(Enum):
     ARRAY_GET = 82         # pop an index, pop an array, push the element
     ARRAY_SET = 83         # pop a value, pop an index, pop an array
 
+    # Files. None of these faults: a failure leaves a reason for FILE_ERROR to
+    # report and pushes a falsy result, which is the same bargain READ_LINE
+    # makes by returning "" at end of input. A program that wants to be stopped
+    # by a missing file asks, rather than being stopped by default.
+    FILE_READ = 84         # pop a path, push its contents ("" on failure)
+    FILE_WRITE = 85        # pop contents, pop a path, push whether it worked
+    FILE_APPEND = 86       # as FILE_WRITE, onto the end
+    FILE_EXISTS = 87       # pop a path, push whether a readable file is there
+    FILE_DELETE = 88       # pop a path, push whether it went
+    FILE_ERROR = 89        # push why the last file operation failed, or ""
+    FILE_READ_BYTES = 90   # pop a path, push an Array<int> of its bytes
+    FILE_WRITE_BYTES = 91  # pop an array, pop a path, push whether it worked
+
 
 Operand = Union[int, None]
 

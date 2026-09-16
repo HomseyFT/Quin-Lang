@@ -52,6 +52,21 @@ def get_builtins() -> Dict[str, BuiltinSig]:
         # and a blank line is "\n"; std/input.ql wraps that in an enum for
         # code that would rather match than compare lengths.
         "read_line":  ([], "str"),
+        # Files. Every one of these is total: a failure sets the reason that
+        # file_error() reports and the program keeps going, the same bargain
+        # read_line makes by returning "" at end of input. std/fs.ql turns that
+        # into a Result, which is the version worth writing programs against.
+        "file_read":        (["str"], "str"),
+        "file_write":       (["str", "str"], "bool"),
+        "file_append":      (["str", "str"], "bool"),
+        "file_exists":      (["str"], "bool"),
+        "file_delete":      (["str"], "bool"),
+        "file_error":       ([], "str"),
+        # The byte-oriented pair, for content that is not text. An Array<int>
+        # needs nothing from sema: it resolves through type_from_name like any
+        # other name, which is why the raw layer can stay free of std types.
+        "file_read_bytes":  (["str"], "Array<int>"),
+        "file_write_bytes": (["str", "Array<int>"], "bool"),
         # argc() counts what the host supplied, so a program cannot assume
         # argv(0) exists: the driver puts the program path there as C does, but
         # an embedded VM supplies whatever it likes, including nothing.

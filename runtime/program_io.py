@@ -18,8 +18,9 @@ a second call to ask about it -- a blank line is `"\n"`, never `""`.
 
 from __future__ import annotations
 
+import os
 import sys
-from typing import List, Protocol
+from typing import Dict, List, Protocol
 
 
 class ProgramIO(Protocol):
@@ -43,6 +44,31 @@ class ProgramIO(Protocol):
         holds. The VM checks rather than trusting this, because the check has
         to cover every implementation and not just the one below.
         """
+
+    # -- files --------------------------------------------------------------
+    #
+    # Same argument as output: where a program's files come from is the caller's
+    # choice, not the interpreter's assumption. A VM embedded in an editor may
+    # want a virtual tree, a sandbox may want none at all, and a test wants
+    # neither of those to involve a disk.
+    #
+    # Failure is reported by raising OSError, which is what the underlying calls
+    # already do. **Refusing outright is a legitimate implementation**: raise
+    # OSError("permission denied") and every file builtin reports it through
+    # file_error(), with the program still running.
+
+    def read_file(self, path: str) -> bytes:
+        """The file's bytes. Raises OSError if it cannot be read."""
+
+    def write_file(self, path: str, data: bytes, append: bool) -> None:
+        """Write (or append) bytes, creating the file if needed. Raises OSError."""
+
+    def file_exists(self, path: str) -> bool:
+        """Whether a readable file is there. Never raises: not existing is an
+        answer, not a failure."""
+
+    def delete_file(self, path: str) -> None:
+        """Remove a file. Raises OSError if it is not there or cannot go."""
 
 
 class ConsoleIO:
@@ -72,6 +98,24 @@ class ConsoleIO:
             return buffer.readline().decode("latin-1")
         return sys.stdin.readline()
 
+    # The real filesystem, in bytes. A QuinLang str is one byte per character,
+    # so there is no decoding step and none of its failure modes: a file of
+    # arbitrary bytes reads back as exactly those bytes.
+
+    def read_file(self, path: str) -> bytes:
+        with open(path, "rb") as handle:
+            return handle.read()
+
+    def write_file(self, path: str, data: bytes, append: bool) -> None:
+        with open(path, "ab" if append else "wb") as handle:
+            handle.write(data)
+
+    def file_exists(self, path: str) -> bool:
+        return os.path.isfile(path)
+
+    def delete_file(self, path: str) -> None:
+        os.remove(path)
+
 
 class CaptureIO:
     """Collects output instead of printing it.
@@ -81,8 +125,13 @@ class CaptureIO:
     stdout, where something else is already talking.
     """
 
-    def __init__(self, stdin: str = "") -> None:
+    def __init__(self, stdin: str = "", files: Dict[str, bytes] = None) -> None:
         self.chunks: List[str] = []
+        # An in-memory filesystem. Tests exercise the whole file path without
+        # touching a disk, needing a temporary directory, or cleaning up after
+        # themselves -- and a test that wants a file to already be there just
+        # puts it here.
+        self.files: Dict[str, bytes] = dict(files or {})
         # Split with the terminators kept, so the queue holds exactly what
         # read_line is supposed to return.
         self._pending: List[str] = stdin.splitlines(keepends=True)
@@ -92,6 +141,22 @@ class CaptureIO:
 
     def read_line(self) -> str:
         return self._pending.pop(0) if self._pending else ""
+
+    def read_file(self, path: str) -> bytes:
+        if path not in self.files:
+            raise FileNotFoundError(f"No such file: {path}")
+        return self.files[path]
+
+    def write_file(self, path: str, data: bytes, append: bool) -> None:
+        self.files[path] = (self.files.get(path, b"") + data) if append else data
+
+    def file_exists(self, path: str) -> bool:
+        return path in self.files
+
+    def delete_file(self, path: str) -> None:
+        if path not in self.files:
+            raise FileNotFoundError(f"No such file: {path}")
+        del self.files[path]
 
     @property
     def text(self) -> str:

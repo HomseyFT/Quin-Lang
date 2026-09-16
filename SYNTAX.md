@@ -679,12 +679,37 @@ Always available and lowered directly by the compiler; they cannot be shadowed b
 | `float_to_int(x: float): int` | Truncate toward zero. Faults if the result is outside `-32768..32767`. |
 | `float_to_str(x: float): str` | The same text `println` would print. |
 | `read_line(): str` | The next input line **with its terminator**, or `""` at end of input. |
+| `file_read(path: str): str` | The whole file, or `""` on failure. See [Files](#files). |
+| `file_write(path: str, contents: str): bool` | Replace the file's contents. |
+| `file_append(path: str, contents: str): bool` | Add to the end, creating the file if needed. |
+| `file_exists(path: str): bool` | Whether a readable file is there. |
+| `file_delete(path: str): bool` | Remove it. |
+| `file_error(): str` | Why the last file operation failed, or `""`. |
+| `file_read_bytes(path: str): Array<int>` | The file as one element per byte. |
+| `file_write_bytes(path: str, data: Array<int>): bool` | Write bytes. An element outside `0..255` faults. |
 | `argc(): int` | How many arguments the host supplied. May be zero. |
 | `argv(i: int): str` | Argument `i`. Faults if `i` is outside `0..argc() - 1`. |
 | `gc(): void` | Force a garbage collection. |
 | `panic(msg: str): void` | Stop the program, reporting `msg`. |
 | `ct_eq(a: int, b: int): bool` | Equality, intended to be branchless. |
 | `ct_select(mask: int, x: int, y: int): int` | `x` when `mask` is 1, else `y`. |
+
+### Files
+
+Every file builtin is **total**: none faults on a filesystem failure. A read returns `""`, a write returns `false`, and `file_error()` reports why — the empty string when nothing went wrong.
+
+```quin
+let text: str = file_read("in.txt");
+if (str_len(file_error()) > 0) {
+    println("failed: " + file_error());
+}
+```
+
+`file_error()` is cleared at the start of every file operation, so a stale reason can never be read as a fresh failure. `file_exists` clears it too, and reports `false` rather than an error when the file is simply not there.
+
+`std/fs.ql` wraps all of this into `Result<T, str>`, which is the version worth writing programs against. Content is bytes, one per `str` character; `file_read_bytes` / `file_write_bytes` work in `Array<int>` for content that is not text.
+
+Running out of heap still faults — that is the allocator, not the file.
 
 ### `array_push` / `array_pop`
 
