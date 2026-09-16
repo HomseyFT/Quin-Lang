@@ -246,3 +246,29 @@ fn str_parse_int(s: str): int {
     }
     return value;
 }
+
+// -- rendering, as values ---------------------------------------------------
+//
+// A builtin compiles to instructions and has no entry in the function table,
+// so `int_to_str` cannot be passed as a `fn(int): str` value. Anything taking a
+// `show` function -- vec_show, list_show, option_show -- needs one that can be,
+// and these are that: ordinary functions that call the builtin.
+
+fn show_int(n: int): str {
+    return int_to_str(n);
+}
+
+fn show_str(s: str): str {
+    return s;
+}
+
+fn show_bool(b: bool): str {
+    if (b) {
+        return "true";
+    }
+    return "false";
+}
+
+fn show_char(code: int): str {
+    return char_to_str(code);
+}

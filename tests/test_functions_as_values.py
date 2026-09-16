@@ -221,36 +221,34 @@ class TestCodegen(QuinTestCase):
 
 
 class TestStdList(QuinTestCase):
+    """What these check is unchanged; what they are written over is generic."""
+
     LIST = ('include "std/list.ql";\n'
+            'include "std/string.ql";\n'
             "fn double(n: int): int { return n * 2; }\n"
             "fn odd(n: int): bool { return n % 2 != 0; }\n"
             "fn show(n: int): void { print(n); }\n"
-            "fn xs(): IntList { return list_push(list_push(list_push("
-            "list_empty(), 3), 2), 1); }\n")
+            "fn xs(): List<int> { return list_push(list_push(list_of(3), 2), 1); }\n"
+            "fn empty(): List<int> { return list_empty(); }\n")
+
+    def render(self, expr: str) -> str:
+        return (self.LIST + "fn main(): int { println(list_show(" + expr
+                + ", show_int)); return 0; }")
 
     def test_map(self):
-        self.assertPrints(
-            self.LIST + "fn main(): int { list_println(list_map(xs(), double));"
-                        " return 0; }",
-            "[2, 4, 6]")
+        self.assertPrints(self.render("list_map(xs(), double)"), "[2, 4, 6]")
 
     def test_map_of_an_empty_list(self):
-        self.assertPrints(
-            self.LIST + "fn main(): int { list_println(list_map(list_empty(),"
-                        " double)); return 0; }",
-            "[]")
+        self.assertPrints(self.render("list_map(empty(), double)"), "[]")
 
     def test_filter(self):
-        self.assertPrints(
-            self.LIST + "fn main(): int { list_println(list_filter(xs(), odd));"
-                        " return 0; }",
-            "[1, 3]")
+        self.assertPrints(self.render("list_filter(xs(), odd)"), "[1, 3]")
 
     def test_filter_keeping_nothing(self):
         self.assertPrints(
             self.LIST + "fn none(n: int): bool { return false; }\n"
-                        "fn main(): int { list_println(list_filter(xs(), none));"
-                        " return 0; }",
+                        "fn main(): int { println(list_show(list_filter(xs(), none),"
+                        " show_int)); return 0; }",
             "[]")
 
     def test_foreach(self):
@@ -261,9 +259,25 @@ class TestStdList(QuinTestCase):
 
     def test_the_original_list_is_unchanged(self):
         self.assertPrints(
-            self.LIST + "fn main(): int { let l: IntList = xs();"
-                        " list_map(l, double); list_println(l); return 0; }",
+            self.LIST + "fn main(): int { let l: List<int> = xs();"
+                        " list_map(l, double);"
+                        " println(list_show(l, show_int)); return 0; }",
             "[1, 2, 3]")
+
+    def test_fold_over_an_accumulator_of_another_type(self):
+        # The pairing generics made possible: a function value whose parameter
+        # types are bound at the call rather than written into the library.
+        self.assertPrints(
+            self.LIST + 'fn join(acc: str, n: int): str { return acc + "." + show_int(n); }\n'
+                        'fn main(): int { println(list_fold(xs(), "x", join)); return 0; }',
+            "x.1.2.3")
+
+    def test_map_changes_the_element_type(self):
+        self.assertPrints(
+            self.LIST + 'fn tag(n: int): str { return "n" + show_int(n); }\n'
+                        "fn main(): int { println(list_show(list_map(xs(), tag),"
+                        " show_str)); return 0; }",
+            "[n1, n2, n3]")
 
 
 if __name__ == "__main__":

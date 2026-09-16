@@ -7,14 +7,17 @@
 // carrying captured state would have to live on the heap like any other object.
 
 include "std/list.ql";
+include "std/string.ql";
 
 fn add(a: int, b: int): int { return a + b; }
 fn mul(a: int, b: int): int { return a * b; }
 
 // A function taken as a parameter. Which one arrives is not known here.
-fn fold(head: IntList, seed: int, op: fn(int, int): int): int {
+// std/list.ql ships this as list_fold, generic in both the element and the
+// accumulator; it is spelled out once here to show the shape.
+fn fold(head: List<int>, seed: int, op: fn(int, int): int): int {
     let total: int = seed;
-    let cur: IntList = head;
+    let cur: List<int> = head;
     while (cur != null) {
         total = op(total, cur.value);
         cur = cur.next;
@@ -34,12 +37,12 @@ fn is_odd(n: int): bool { return n % 2 != 0; }
 fn show(n: int): void { print(n); print(" "); }
 
 fn main(): int {
-    let xs: IntList = list_push(list_push(list_push(list_empty(), 3), 2), 1);
-    list_print(xs);
-    println("");
+    let xs: List<int> = list_empty();
+    xs = list_push(list_push(list_push(xs, 3), 2), 1);
+    println(list_show(xs, show_int));
 
-    println(fold(xs, 0, add));   // 6
-    println(fold(xs, 1, mul));   // 6
+    println(fold(xs, 0, add));         // 6
+    println(list_fold(xs, 1, mul));    // 6 — the library's, same shape
 
     // Returned from a function, stored in a variable, then called through it.
     let chosen: fn(int, int): int = add;
@@ -56,8 +59,8 @@ fn main(): int {
     let op: fn(int, int): int = times.apply;
     println(op(6, 7));           // 42
 
-    list_println(list_map(xs, double));
-    list_println(list_filter(xs, is_odd));
+    println(list_show(list_map(xs, double), show_int));
+    println(list_show(list_filter(xs, is_odd), show_int));
     list_foreach(xs, show);
     println("");
     return 0;

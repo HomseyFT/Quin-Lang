@@ -31,5 +31,15 @@ reversed  = f77d
 140
 49
 [36, 25, 16, 9, 4, 1]
+-- one container, any element --
+[generic, by, monomorphization]
+[GENERIC!, BY!, MONOMORPHIZATION!]
+2
+-- higher order --
+[1296, 625, 256, 81, 16, 1]
+[36, 16, 4]
+91
+None
 [36, 25, 16, 9, 4, 1]
+[generic, by, monomorphization]
 [1, 2, 3, 4, 5]

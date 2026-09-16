@@ -30,11 +30,11 @@ def io(body: str) -> str:
 
 
 def lists(body: str) -> str:
-    return program(["list"], body)
+    return program(["string", "list"], body)
 
 
 def vecs(body: str) -> str:
-    return program(["vec"], body)
+    return program(["string", "vec"], body)
 
 
 class TestPanic(QuinTestCase):
@@ -263,103 +263,103 @@ class TestIo(QuinTestCase):
 class TestList(QuinTestCase):
     def test_push_and_read_back(self):
         self.assertPrints(lists(
-            "let l: IntList = list_empty();\n"
+            "let l: List<int> = list_empty();\n"
             "l = list_push(l, 3); l = list_push(l, 2); l = list_push(l, 1);\n"
             "println(list_len(l)); println(list_head(l)); println(list_last(l));"),
             "3", "1", "3")
 
     def test_empty_list(self):
         self.assertPrints(lists(
-            "let l: IntList = list_empty();\n"
+            "let l: List<int> = list_empty();\n"
             "println(list_is_empty(l)); println(list_len(l)); println(list_sum(l)); "
             "println(list_contains(l, 1));"),
             "true", "0", "0", "false")
 
     def test_get(self):
         self.assertPrints(lists(
-            "let l: IntList = list_push(list_push(list_push(null, 3), 2), 1);\n"
+            "let l: List<int> = list_push(list_push(list_of(3), 2), 1);\n"
             "println(list_get(l, 0)); println(list_get(l, 1)); println(list_get(l, 2));"),
             "1", "2", "3")
 
     def test_sum_and_extremes(self):
         self.assertPrints(lists(
-            "let l: IntList = list_push(list_push(list_push(null, 5), 0 - 2), 9);\n"
+            "let l: List<int> = list_push(list_push(list_of(5), 0 - 2), 9);\n"
             "println(list_sum(l)); println(list_max(l)); println(list_min(l));"),
             "12", "9", "-2")
 
     def test_contains_and_index_of(self):
         self.assertPrints(lists(
-            "let l: IntList = list_push(list_push(null, 7), 4);\n"
+            "let l: List<int> = list_push(list_of(7), 4);\n"
             "println(list_contains(l, 7)); println(list_contains(l, 8)); "
             "println(list_index_of(l, 7)); println(list_index_of(l, 8));"),
             "true", "false", "1", "-1")
 
     def test_reverse_leaves_the_original_alone(self):
         self.assertPrints(lists(
-            "let l: IntList = list_push(list_push(list_push(null, 3), 2), 1);\n"
-            "let r: IntList = list_reverse(l);\n"
-            "list_println(l); list_println(r);"),
+            "let l: List<int> = list_push(list_push(list_of(3), 2), 1);\n"
+            "let r: List<int> = list_reverse(l);\n"
+            "println(list_show(l, show_int)); println(list_show(r, show_int));"),
             "[1, 2, 3]", "[3, 2, 1]")
 
     def test_tail_shares_the_rest_of_the_list(self):
         self.assertPrints(lists(
-            "let l: IntList = list_push(list_push(null, 2), 1);\n"
+            "let l: List<int> = list_push(list_of(2), 1);\n"
             "println(list_head(list_tail(l))); println(list_len(list_tail(l)));"),
             "2", "1")
 
     def test_printing(self):
         self.assertPrints(lists(
-            "list_println(list_empty());\n"
-            "list_println(list_push(null, 9));\n"
-            "list_println(list_push(list_push(null, 2), 1));"),
+            "println(list_show(list_empty::<int>(), show_int));\n"
+            "println(list_show(list_of(9), show_int));\n"
+            "println(list_show(list_push(list_of(2), 1), show_int));"),
             "[]", "[9]", "[1, 2]")
 
     def test_a_long_list_survives_collection(self):
         self.assertPrints(lists(
-            "let l: IntList = list_empty();\n"
+            "let l: List<int> = list_empty();\n"
             "for (let i = 0; i < 100; i = i + 1) { l = list_push(l, i); }\n"
             "gc();\n"
             "println(list_len(l)); println(list_sum(l)); println(list_head(l));"),
             "100", "4950", "99")
 
     def test_empty_list_accessors_panic(self):
-        self.assertRuntimeError(lists("println(list_head(list_empty()));"), "empty list")
-        self.assertRuntimeError(lists("println(list_last(list_empty()));"), "empty list")
-        self.assertRuntimeError(lists("println(list_max(list_empty()));"), "empty list")
-        self.assertRuntimeError(lists("println(list_min(list_empty()));"), "empty list")
-        self.assertRuntimeError(lists("let l: IntList = list_tail(list_empty());"),
+        self.assertRuntimeError(lists("println(list_head(list_empty::<int>()));"), "empty list")
+        self.assertRuntimeError(lists("println(list_last(list_empty::<int>()));"), "empty list")
+        self.assertRuntimeError(lists("println(list_max(list_empty::<int>()));"), "empty list")
+        self.assertRuntimeError(lists("println(list_min(list_empty::<int>()));"), "empty list")
+        self.assertRuntimeError(lists("let l: List<int> = list_tail(list_empty::<int>());"),
                                 "empty list")
 
     def test_get_out_of_range_panics(self):
-        self.assertRuntimeError(lists("println(list_get(list_push(null, 1), 5));"),
+        self.assertRuntimeError(lists("println(list_get(list_of(1), 5));"),
                                 "past the end")
-        self.assertRuntimeError(lists("println(list_get(list_push(null, 1), 0 - 1));"),
+        self.assertRuntimeError(lists("println(list_get(list_of(1), 0 - 1));"),
                                 "negative index")
 
 
 class TestVec(QuinTestCase):
     def test_push_and_read_back(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(4);\n"
+            "let v: Vec<int> = vec_new(4);\n"
             "vec_push(v, 10); vec_push(v, 20); vec_push(v, 30);\n"
             "println(vec_len(v)); println(vec_get(v, 0)); println(vec_get(v, 2));"),
             "3", "10", "30")
 
     def test_a_new_vector_is_empty(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(2);\n"
+            "let v: Vec<int> = vec_new(2);\n"
             "println(vec_len(v)); println(vec_is_empty(v)); println(vec_capacity(v));"),
             "0", "true", "2")
 
     def test_set(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(2);\n"
+            "let v: Vec<int> = vec_new(2);\n"
             "vec_push(v, 1); vec_set(v, 0, 99); println(vec_get(v, 0));"),
             "99")
 
     def test_growth_preserves_the_contents(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(1);\n"
+            "let v: Vec<int> = vec_new(1);\n"
             "for (let i = 0; i < 10; i = i + 1) { vec_push(v, i * 3); }\n"
             "println(vec_len(v)); println(vec_get(v, 0)); println(vec_get(v, 9)); "
             "println(vec_sum(v)); println(vec_capacity(v));"),
@@ -367,21 +367,21 @@ class TestVec(QuinTestCase):
 
     def test_pop(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(4);\n"
+            "let v: Vec<int> = vec_new(4);\n"
             "vec_push(v, 1); vec_push(v, 2);\n"
             "println(vec_pop(v)); println(vec_len(v)); println(vec_last(v));"),
             "2", "1", "1")
 
     def test_clear_keeps_the_capacity(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(4);\n"
+            "let v: Vec<int> = vec_new(4);\n"
             "vec_push(v, 1); vec_push(v, 2); vec_clear(v);\n"
             "println(vec_len(v)); println(vec_capacity(v)); println(vec_is_empty(v));"),
             "0", "4", "true")
 
     def test_contains_and_index_of(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(4);\n"
+            "let v: Vec<int> = vec_new(4);\n"
             "vec_push(v, 5); vec_push(v, 6);\n"
             "println(vec_contains(v, 6)); println(vec_contains(v, 7)); "
             "println(vec_index_of(v, 6)); println(vec_index_of(v, 7));"),
@@ -389,16 +389,16 @@ class TestVec(QuinTestCase):
 
     def test_reverse(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(4);\n"
+            "let v: Vec<int> = vec_new(4);\n"
             "for (let i = 1; i < 5; i = i + 1) { vec_push(v, i); }\n"
-            "vec_reverse(v); vec_println(v);"),
+            "vec_reverse(v); println(vec_show(v, show_int));"),
             "[4, 3, 2, 1]")
 
     def test_reverse_of_an_odd_length(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(4);\n"
+            "let v: Vec<int> = vec_new(4);\n"
             "vec_push(v, 1); vec_push(v, 2); vec_push(v, 3);\n"
-            "vec_reverse(v); vec_println(v);"),
+            "vec_reverse(v); println(vec_show(v, show_int));"),
             "[3, 2, 1]")
 
     def test_a_vector_is_a_reference(self):
@@ -407,11 +407,11 @@ class TestVec(QuinTestCase):
         self.assertPrints(
             'include "std/vec.ql";\n'
             """
-            fn fill(target: IntVec): void {
+            fn fill(target: Vec<int>): void {
                 for (let i = 0; i < 5; i = i + 1) { vec_push(target, i); }
             }
             fn main(): int {
-                let v: IntVec = vec_new(1);
+                let v: Vec<int> = vec_new(1);
                 fill(v);
                 println(vec_len(v));
                 println(vec_get(v, 4));
@@ -422,18 +422,18 @@ class TestVec(QuinTestCase):
 
     def test_printing(self):
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(2);\n"
-            "vec_println(v);\n"
-            "vec_push(v, 7); vec_println(v);\n"
-            "vec_push(v, 8); vec_println(v);"),
+            "let v: Vec<int> = vec_new(2);\n"
+            "println(vec_show(v, show_int));\n"
+            "vec_push(v, 7); println(vec_show(v, show_int));\n"
+            "vec_push(v, 8); println(vec_show(v, show_int));"),
             "[]", "[7]", "[7, 8]")
 
     def test_the_block_survives_a_collection_that_moves_it(self):
         # data is a heapptr field, so the collector traces and rewrites it.
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(8);\n"
+            "let v: Vec<int> = vec_new(8);\n"
             "for (let i = 0; i < 8; i = i + 1) { vec_push(v, i); }\n"
-            "for (let i = 0; i < 500; i = i + 1) { let junk: IntVec = vec_new(4); }\n"
+            "for (let i = 0; i < 500; i = i + 1) { let junk: Vec<int> = vec_new(4); }\n"
             "gc();\n"
             "println(vec_len(v)); println(vec_sum(v)); println(vec_get(v, 7));"),
             "8", "28", "7")
@@ -441,34 +441,177 @@ class TestVec(QuinTestCase):
     def test_growth_during_collection_pressure(self):
         # Every vec_grow allocates, and one of those allocations collects.
         self.assertPrints(vecs(
-            "let v: IntVec = vec_new(1);\n"
+            "let v: Vec<int> = vec_new(1);\n"
             "for (let i = 0; i < 400; i = i + 1) {\n"
-            "    let junk: IntVec = vec_new(8);\n"
+            "    let junk: Vec<int> = vec_new(8);\n"
             "    vec_push(v, i);\n"
             "}\n"
             "println(vec_len(v)); println(vec_get(v, 0)); println(vec_get(v, 399));"),
             "400", "0", "399")
 
     def test_out_of_range_access_panics(self):
-        self.assertRuntimeError(vecs("let v: IntVec = vec_new(4); println(vec_get(v, 0));"),
+        self.assertRuntimeError(vecs("let v: Vec<int> = vec_new(4); println(vec_get(v, 0));"),
                                 "vec_get index out of range")
         self.assertRuntimeError(
-            vecs("let v: IntVec = vec_new(4); vec_push(v, 1); println(vec_get(v, 1));"),
+            vecs("let v: Vec<int> = vec_new(4); vec_push(v, 1); println(vec_get(v, 1));"),
             "vec_get index out of range")
         self.assertRuntimeError(
-            vecs("let v: IntVec = vec_new(4); vec_set(v, 0, 1);"),
+            vecs("let v: Vec<int> = vec_new(4); vec_set(v, 0, 1);"),
             "vec_set index out of range")
 
     def test_popping_an_empty_vector_panics(self):
-        self.assertRuntimeError(vecs("let v: IntVec = vec_new(2); println(vec_pop(v));"),
+        self.assertRuntimeError(vecs("let v: Vec<int> = vec_new(2); println(vec_pop(v));"),
                                 "empty vector")
-        self.assertRuntimeError(vecs("let v: IntVec = vec_new(2); println(vec_last(v));"),
+        self.assertRuntimeError(vecs("let v: Vec<int> = vec_new(2); println(vec_last(v));"),
                                 "empty vector")
 
     def test_a_bad_capacity_panics(self):
-        self.assertRuntimeError(vecs("let v: IntVec = vec_new(0);"), "capacity of at least 1")
-        self.assertRuntimeError(vecs("let v: IntVec = vec_new(0 - 1);"), "capacity of at least 1")
-        self.assertRuntimeError(vecs("let v: IntVec = vec_new(20000);"), "too large")
+        self.assertRuntimeError(vecs("let v: Vec<int> = vec_new(0);"), "capacity of at least 1")
+        self.assertRuntimeError(vecs("let v: Vec<int> = vec_new(0 - 1);"), "capacity of at least 1")
+        # The old library capped capacity itself, because it sized a raw block
+        # in bytes and the product had to stay in an int. An Array<T> is sized
+        # in elements, so the only limit left is the heap, and the VM reports
+        # reaching it rather than the library guessing where it is.
+        self.assertRuntimeError(vecs("let v: Vec<int> = vec_new(32767);"),
+                                "out of memory")
+
+
+class TestOneContainerManyElements(QuinTestCase):
+    """The cases the concrete library could not state at all.
+
+    IntVec and IntList were the same module twice, and a third element type
+    would have been a third copy -- with a third chance for the collector
+    interaction to drift. These are that third copy, not written.
+    """
+
+    def test_a_vector_of_strings(self):
+        self.assertPrints(vecs(
+            'let v: Vec<str> = vec_new(2);\n'
+            'vec_push(v, "a"); vec_push(v, "b"); vec_push(v, "c");\n'
+            'println(vec_show(v, show_str)); println(vec_len(v)); '
+            'println(vec_contains(v, "b"));'),
+            "[a, b, c]", "3", "true")
+
+    def test_a_list_of_strings(self):
+        self.assertPrints(lists(
+            'let l: List<str> = list_push(list_of("z"), "y");\n'
+            'println(list_show(l, show_str)); println(list_index_of(l, "z"));'),
+            "[y, z]", "1")
+
+    def test_map_across_element_types(self):
+        # Vec<int> in, Vec<str> out. Inexpressible before generics.
+        self.assertPrints(vecs(
+            "let v: Vec<int> = vec_new(2);\n"
+            "vec_push(v, 1); vec_push(v, 2);\n"
+            "println(vec_show(vec_map(v, show_int), show_str));"),
+            "[1, 2]")
+
+    def test_map_from_references_to_values(self):
+        self.assertPrints(vecs(
+            'let v: Vec<str> = vec_new(2);\n'
+            'vec_push(v, "abc"); vec_push(v, "de");\n'
+            'println(vec_show(vec_map(v, width), show_int));')
+            + "fn width(s: str): int { return str_len(s); }\n",
+            "[3, 2]")
+
+    def test_filter_and_fold(self):
+        self.assertPrints(vecs(
+            "let v: Vec<int> = vec_new(4);\n"
+            "for (let i = 1; i <= 6; i = i + 1) { vec_push(v, i); }\n"
+            "println(vec_show(vec_filter(v, even), show_int));\n"
+            "println(vec_fold(v, 0, add));\n"
+            "println(vec_any(v, even)); println(vec_all(v, even));")
+            + "fn even(n: int): bool { return n % 2 == 0; }\n"
+              "fn add(a: int, b: int): int { return a + b; }\n",
+            "[2, 4, 6]", "21", "true", "false")
+
+    def test_list_fold_over_a_free_accumulator(self):
+        # The accumulator type is independent of the element type.
+        self.assertPrints(lists(
+            'let l: List<int> = list_push(list_push(list_of(3), 2), 1);\n'
+            'println(list_fold(l, "", join));')
+            + 'fn join(acc: str, n: int): str { return acc + show_int(n); }\n',
+            "123")
+
+    def test_try_get_reports_absence_instead_of_panicking(self):
+        self.assertPrints(vecs(
+            "let v: Vec<int> = vec_new(1);\n"
+            "vec_push(v, 5);\n"
+            "println(option_show(vec_try_get(v, 0), show_int));\n"
+            "println(option_show(vec_try_get(v, 9), show_int));"),
+            "Some(5)", "None")
+
+    def test_each_instantiation_keeps_its_own_collector_layout(self):
+        from tests.harness import compile_source
+        program = compile_source(vecs(
+            'let a: Vec<int> = vec_new(1);\n'
+            'let b: Vec<str> = vec_new(1);\n'
+            'vec_push(a, 1); vec_push(b, "x");'))
+        pushes = {f.name: f for f in program.functions if f.name.startswith("vec_push")}
+        # Both root the vector; only the str instantiation roots its value.
+        self.assertEqual(pushes["vec_push<int>"].ref_slots, (0,))
+        self.assertEqual(pushes["vec_push<str>"].ref_slots, (0, 1))
+
+    def test_strings_in_a_vector_survive_collection(self):
+        self.assertPrints(vecs(
+            'let v: Vec<str> = vec_new(2);\n'
+            'for (let i = 0; i < 20; i = i + 1) { vec_push(v, "s" + show_int(i)); }\n'
+            'gc();\n'
+            'println(vec_get(v, 0)); println(vec_get(v, 19)); println(vec_len(v));'),
+            "s0", "s19", "20")
+
+    def test_a_vector_of_vectors(self):
+        self.assertPrints(vecs(
+            "let outer: Vec<Vec<int>> = vec_new(2);\n"
+            "for (let r = 0; r < 2; r = r + 1) {\n"
+            "    let row: Vec<int> = vec_new(2);\n"
+            "    vec_push(row, r); vec_push(row, r + 10);\n"
+            "    vec_push(outer, row);\n"
+            "}\n"
+            "gc();\n"
+            "println(vec_get(vec_get(outer, 1), 1));"),
+            "11")
+
+
+class TestOptionAndResult(QuinTestCase):
+    def test_option_helpers(self):
+        self.assertPrints(program(["string", "option"],
+            'let a: Option<int> = Option::Some(4);\n'
+            'let b: Option<int> = Option::None;\n'
+            'println(option_is_some(a)); println(option_is_none(b));\n'
+            'println(option_unwrap(a)); println(option_unwrap_or(b, 0 - 1));\n'
+            'println(option_show(option_map(a, show_int), show_str));'),
+            "true", "true", "4", "-1", "Some(4)")
+
+    def test_unwrapping_none_panics(self):
+        self.assertRuntimeError(program(["option"],
+            "let b: Option<int> = Option::None; println(option_unwrap(b));"),
+            "option_unwrap called on None")
+
+    def test_result_helpers(self):
+        self.assertPrints(program(["string", "result"],
+            'let ok: Result<int, str> = Result::Ok(3);\n'
+            'let bad: Result<int, str> = Result::Err("nope");\n'
+            'println(result_is_ok(ok)); println(result_is_err(bad));\n'
+            'println(result_unwrap_or(bad, 0));\n'
+            'println(result_show(ok, show_int, show_str));\n'
+            'println(result_show(bad, show_int, show_str));'),
+            "true", "true", "0", "Ok(3)", "Err(nope)")
+
+    def test_result_narrows_to_option(self):
+        self.assertPrints(program(["string", "result"],
+            'let ok: Result<int, str> = Result::Ok(3);\n'
+            'let bad: Result<int, str> = Result::Err("nope");\n'
+            'println(option_show(result_ok(ok), show_int));\n'
+            'println(option_show(result_ok(bad), show_int));\n'
+            'println(option_show(result_err(bad), show_str));'),
+            "Some(3)", "None", "Some(nope)")
+
+    def test_an_error_type_that_is_not_a_string(self):
+        self.assertPrints(program(["string", "result"],
+            'let r: Result<str, int> = Result::Err(404);\n'
+            'println(result_show(r, show_str, show_int));'),
+            "Err(404)")
 
 
 class TestPrelude(QuinTestCase):
@@ -481,8 +624,8 @@ class TestPrelude(QuinTestCase):
     def test_the_prelude_can_be_combined_with_the_collections(self):
         self.assertPrints(program(["prelude", "list", "vec"],
                                   "println(gcd(12, 18)); "
-                                  "println(list_len(list_push(null, 1))); "
-                                  "println(vec_capacity(vec_new(3)));"),
+                                  "println(list_len(list_of(1))); "
+                                  "println(vec_capacity(vec_new::<int>(3)));"),
                           "6", "1", "3")
 
     def test_including_a_module_twice_is_harmless(self):

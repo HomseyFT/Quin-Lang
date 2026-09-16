@@ -51,7 +51,7 @@ A larger tour of arrays, pointers, printing, and boolean logic:
 python3 -m compiler.driver_vm examples/hello.ql
 ```
 
-Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/stdlib.ql` (a tour of the standard library), `examples/strings.ql` (building and inspecting strings), `examples/vm_arrays_push.ql` (`array_push`), `examples/floats.ql` (floats and `std/float.ql`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
+Other examples worth reading: `examples/control_flow.ql` (short-circuit operators), `examples/for_loops.ql` (`for`, `break` / `continue`, blocks), `examples/structs.ql` (structs, references, a linked list), `examples/gc.ql` (the collector at work), `examples/stdlib.ql` (a tour of the standard library), `examples/generics.ql` (writing generic functions over `Vec<T>`), `examples/arrays.ql` (`Array<T>` and the collector), `examples/strings.ql` (building and inspecting strings), `examples/vm_arrays_push.ql` (`array_push`), `examples/floats.ql` (floats and `std/float.ql`), `examples/vm_asm_example.ql` (inline bytecode), `examples/ct_primitives.ql` (`ct_eq` / `ct_select`).
 
 `main`'s return value becomes the process exit code, so a program can be tested from a shell:
 
@@ -115,14 +115,18 @@ fn main(): int {
 | --- | --- |
 | `std/math.ql` | `abs`, `min`, `max`, `clamp`, `sign`, `is_even`, `is_odd`, `pow`, `gcd`, `lcm`, `isqrt` |
 | `std/bits.ql` | `bit_get` / `bit_set` / `bit_clear` / `bit_toggle`, `popcount`, `reverse_bits`, `leading_zeros`, `trailing_zeros`, `highest_bit`, `rotate_left` / `rotate_right`, `logical_shift_right` |
-| `std/string.ql` | Searching, slicing, case conversion, trimming, parsing, and character predicates |
+| `std/string.ql` | Searching, slicing, case conversion, trimming, parsing, character predicates, and `show_int` / `show_str` / `show_bool` / `show_char` for handing a renderer to `vec_show` and friends |
 | `std/io.ql` | `newline`, `print_repeat`, `print_spaces`, `print_line`, `hex_digit`, `print_hex` / `println_hex`, `print_binary` / `println_binary`, `print_padded` |
-| `std/list.ql` | `IntList`, a persistent singly linked list: `list_push`, `list_len`, `list_get`, `list_sum`, `list_reverse`, `list_contains`, and friends |
-| `std/vec.ql` | `IntVec`, a growable int array on the heap: `vec_new`, `vec_push`, `vec_get`, `vec_set`, `vec_pop`, `vec_reverse`, and friends |
+| `std/vec.ql` | `Vec<T>`, a growable array over an `Array<T>`: `vec_new`, `vec_of`, `vec_push`, `vec_get`, `vec_try_get`, `vec_set`, `vec_pop`, `vec_reverse`, `vec_map`, `vec_filter`, `vec_fold`, `vec_any` / `vec_all`, `vec_show`, and `vec_sum` / `vec_max` / `vec_min` over `Vec<int>` |
+| `std/list.ql` | `List<T>`, a persistent singly linked list: `list_push`, `list_of`, `list_len`, `list_get`, `list_try_get`, `list_reverse`, `list_contains`, the same higher-order set, and `list_sum` / `list_max` / `list_min` over `List<int>` |
+| `std/option.ql` | `Option<T>`: `option_is_some`, `option_is_none`, `option_unwrap`, `option_unwrap_or`, `option_map`, `option_show` |
+| `std/result.ql` | `Result<T, E>`: `result_is_ok`, `result_is_err`, `result_unwrap`, `result_unwrap_or`, `result_map`, `result_ok` / `result_err` into an `Option`, `result_show` |
 | `std/float.ql` | `fabs`, `fmin`, `fmax`, `fsign`, `floor`, `ceil`, `round`, `ftrunc`, `fpow`, `fclose` |
 | `std/prelude.ql` | Includes the three function-only modules above, so one include brings in the common helpers |
 
-The collection modules are not in the prelude, because each declares a struct type and a struct name is global once included. Include those by name when you want them.
+The four modules that declare a type are not in the prelude, because a struct or enum name is global once included. Include those by name when you want them.
+
+Each collection is written **once**, not once per element type. `Vec<int>` and `Vec<str>` are two instantiations of one module, so there is no second copy to drift — and because they are separate instantiations, the collector traces a `Vec<str>`'s elements and never looks inside a `Vec<int>`. A function that renders elements takes a `fn(T): str`, since only the caller knows how to show a `T`; `std/string.ql` ships `show_int` and friends because a builtin like `int_to_str` cannot itself be a function value.
 
 Two constraints shaped the library. Arrays cannot be parameters or return types, so anything that crosses a function boundary is built from structs — a linked list, or a `heapptr` field wrapped in one. Strings, by contrast, are now first-class heap objects, which is what makes `std/string.ql` possible at all.
 
@@ -189,7 +193,7 @@ fn main(): int {
 
 The type is written the way the declaration is, minus the parameter names: `fn(int, int): int`. Omitting `: R` means `void`, so `fn(str)` and `fn(str): void` are the same type. Function types nest, so `fn(fn(int): int): void` is a function taking a function.
 
-A function value is **one word holding an index into the program's function table** — not a heap address. It allocates nothing, the collector never traces one, and a `fn` field costs a struct exactly one slot. `std/list.ql` uses this for `list_map`, `list_filter` and `list_foreach`.
+A function value is **one word holding an index into the program's function table** — not a heap address. It allocates nothing, the collector never traces one, and a `fn` field costs a struct exactly one slot. `std/list.ql` and `std/vec.ql` use this for `map`, `filter`, `fold`, `foreach`, `any` and `all` — generic in the element type, so one definition serves every one of them.
 
 **There is no capture.** A function value says *which function*, and nothing more; there is no environment attached. Capturing would mean a value carrying state, which would have to live on the heap and be traced like any other object — a different feature, with a different cost.
 
@@ -671,7 +675,7 @@ fn main(): int {
 
 The primitive underneath is `read_line()`, and it keeps the line's terminator. That is the whole design: a blank line is `"\n"` and only end of input is `""`, so the two can never be confused. Stripping the newline inside `read_line` would make the last line of a file indistinguishable from the end of it — and the symptom is not a crash but a loop that stops early or never stops at all.
 
-`std/input.ql` turns that convention into an `enum`, which is the version worth writing programs against: a rule you have to remember becomes a variant you have to account for. It is not in the prelude, because it declares a type and a type name is global once included — the same reason `std/list.ql` and `std/vec.ql` are left out.
+`std/input.ql` turns that convention into an `enum`, which is the version worth writing programs against: a rule you have to remember becomes a variant you have to account for. It is not in the prelude, because it declares a type and a type name is global once included — the same reason `std/vec.ql`, `std/list.ql`, `std/option.ql` and `std/result.ql` are left out.
 
 Input is **bytes**, consistent with a `str` holding one byte per character: a UTF-8 character arrives as several, and one too wide for a byte is a runtime fault rather than a silent mangling.
 
