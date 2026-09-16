@@ -95,6 +95,10 @@ FROZEN = {
     "ARGC": 77,
     "ARGV": 78,
     "CALL_INDIRECT": 79,
+    "NEW_ARRAY": 80,
+    "ARRAY_LEN": 81,
+    "ARRAY_GET": 82,
+    "ARRAY_SET": 83,
 }
 
 # Numbers of opcodes that once existed and were removed. A retired number is

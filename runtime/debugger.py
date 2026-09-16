@@ -111,12 +111,17 @@ class FrameView:
     locals: List[int]
 
 
+# How many elements of a heap array are read when one is shown. An int[N] is
+# bounded by its type; an Array<T> is not.
+ARRAY_PREVIEW = 32
+
+
 class ValueKind(Enum):
     """What a value is made of, which is what a front end needs to render it."""
     SCALAR = auto()     # nothing inside: int, bool, float, str, null, an address
     STRUCT = auto()     # named fields
     VARIANT = auto()    # an enum variant, whose payload is positional
-    ARRAY = auto()      # N consecutive slots of one type
+    ARRAY = auto()      # N elements of one type, read eagerly
 
 
 @dataclass(frozen=True)
@@ -523,7 +528,34 @@ class Debugger:
             if 0 <= word < len(self.functions):
                 return Value(self.functions[word].name, type_name)
             return Value(f"<function {to_signed(word)}>", type_name)
+        if type_name.startswith("Array<") and type_name.endswith(">"):
+            return self._describe_array(vm, word, type_name)
         return self._describe_object(vm, word, type_name)
+
+    def _describe_array(self, vm: QuinVM, ref: int, type_name: str) -> Value:
+        """A heap array, read through its own header.
+
+        The length is the object's, not the declared type's -- there is nothing
+        in `Array<str>` that says how long it is -- so an array shows what it
+        actually holds. Long ones are truncated: this is a value to read, and
+        the whole of a thousand-element array is not.
+        """
+        if ref == 0:
+            return Value("null", type_name)
+        element_type = type_name[len("Array<"):-1]
+        try:
+            _, count, _ = vm._array_at(ref, "print")
+        except (VMError, IndexError):
+            return Value(f"<{type_name} at {ref}>", type_name)
+        shown = min(count, ARRAY_PREVIEW)
+        elements = tuple(
+            (f"[{i}]", self._describe_field(vm, ref + i * 2, element_type))
+            for i in range(shown))
+        inner = ", ".join(v.summary for _, v in elements)
+        if shown < count:
+            inner += f", … {count - shown} more"
+        return Value(f"[{inner}]", type_name, ValueKind.ARRAY, address=ref,
+                     elements=elements)
 
     def _describe_object(self, vm: QuinVM, ref: int, type_name: str) -> Value:
         """A heap reference, read through its own header.

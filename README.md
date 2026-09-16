@@ -142,10 +142,11 @@ This is a quick tour; [SYNTAX.md](SYNTAX.md) is the reference.
 - `heapptr` — an address in the heap, produced by `alloc`.
 - `void` — no value; only valid as a return type.
 - `int[N]` — a fixed-size array of `N` ints in the current frame, for a literal `N > 0`.
+- `Array<T>` — a fixed-length array of `T` on the heap. A reference, so it is passed and returned like a struct. See [Heap arrays](#heap-arrays).
 - `fn(T, ...): R` — a function taking those parameter types and returning `R`. See [Functions as values](#functions-as-values).
 - a `struct` name — a reference to a heap object. See [Structs](#structs).
 
-Arrays are deliberately second-class: they cannot be parameters, return types, initialized at declaration, assigned as a whole, or used as a value. They are zeroed at declaration and filled element by element.
+`int[N]` is deliberately second-class: it cannot be a parameter, a return type, a field, initialized at declaration, assigned as a whole, or used as a value. It is zeroed at declaration and filled element by element. `Array<T>` is the one to reach for when any of that gets in the way.
 
 ### Functions
 
@@ -345,6 +346,47 @@ Semantic error: [3:27] array_pop at length 0 accesses index -1, out of bounds fo
 ```
 
 and a computed one faults at run time. The length is still yours to maintain — the check stops a mistake from reaching a neighboring local, it does not track the length for you.
+
+### Heap arrays
+
+`Array<T>` is a fixed-length array of `T` that lives on the heap. Where an `int[N]` is a region of the current frame, an `Array<T>` is an object, and the difference shows up everywhere the frame array is second-class:
+
+```quin
+fn build(n: int): Array<str> {
+    let rows: Array<str> = array_new(n);
+    for (let i = 0; i < n; i = i + 1) {
+        rows[i] = "row " + int_to_str(i);
+    }
+    return rows;            // an int[N] could not be returned
+}
+
+fn main(): int {
+    let rows: Array<str> = build(3);
+    println(array_len(rows));
+    println(rows[2]);
+    return 0;
+}
+```
+
+It is a reference like any other, so it can be a parameter, a return type, a struct field, and an element of another array — `Array<Array<int>>` is a type. Passing one passes the array itself, not a copy, so a function that writes to its elements writes to the caller's.
+
+`array_new` takes its element type from the declaration it initialises, because nothing about `array_new(8)` says what it builds:
+
+```
+Semantic error: [2:22] Cannot tell what array_new builds here: nothing says
+what its elements are. Annotate what it initialises, as in
+'let a: Array<str> = array_new(8);'
+```
+
+The length lives in the object's heap header rather than in the type. That is what `array_len` reads, and what the bounds check compares against, so every index is checked at run time — there is no compile-time length to check a literal index against, as there is for `int[N]`:
+
+```
+Runtime error: [5:16] in main: Array index out of bounds: index=3, length=3
+```
+
+An element must be one word wide, so `Array<float>` is not a type — the header counts elements, not words. That is the same restriction that makes `float[N]` unavailable, arrived at from the other direction.
+
+**The collector decides what to trace from the object, not from the code reading it.** An array whose elements are references gets a different heap kind from one whose elements are values, chosen when it is allocated and recorded in its header. Marking and compaction read that kind, so an `Array<str>` has every element traced and rewritten when its strings move, and an `Array<int>` is never traced at all — an `int` that happens to look like a heap address keeps nothing alive.
 
 ### Structs
 
@@ -1082,7 +1124,8 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - Array indexing is bounds-checked at compile time for literal indices and at run time for everything else, `array_push` / `array_pop` included.
 - A `ptr` does not outlive the frame it points into.
 - Collection is triggered only by allocation pressure or an explicit `gc()`. Every collection moves every surviving object that has somewhere lower to go.
-- `float` is 32-bit single precision, so it carries about seven significant digits. There are no float arrays, no exponent notation in literals, and no `&` on a float.
+- `float` is 32-bit single precision, so it carries about seven significant digits. There are no float arrays of either kind — `float[N]` and `Array<float>` are both refused, because a float is two words wide and both arrays count elements. There is no exponent notation in literals, and no `@` on a float.
+- An `Array<T>` element has no frame address, so `@a[0]` is refused on one. Its length is fixed at construction: growing means building a longer array and copying.
 - Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
 - The process exit code carries only the low byte of `main`'s return value. Compile and runtime errors use 2 and 3, which a program may also return; stderr is the unambiguous signal.
 

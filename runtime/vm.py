@@ -32,6 +32,12 @@ HEAP_START = NULL_ADDR + 2  # leave address 0 reserved for null
 KIND_STRUCT = 0  # detail is a struct type id; trace its reference fields
 KIND_RAW = 1     # detail is a byte size; reachable, reclaimable, never traced
 KIND_STRING = 2  # detail is a byte length; the bytes follow, never traced
+# Heap arrays. detail is the element count, and an element is one word, which is
+# why Array<float> is not a type. The kind alone says whether the payload holds
+# references, so the collector learns how to trace an array from the array --
+# never from the code that happens to be reading it.
+KIND_REFARRAY = 3  # every payload word is a reference; traced
+KIND_VALARRAY = 4  # every payload word is a value; never traced
 MARK_BIT = 0x8000
 
 # There is no free-block kind: the collector slides live objects together, so
@@ -472,6 +478,8 @@ class QuinVM:
             if type_id >= len(self.structs):
                 raise VMError(f"Corrupt heap: object at {hdr} has unknown type id {type_id}")
             return max(self.structs[type_id].word_size * 2, MIN_PAYLOAD)
+        if kind in (KIND_REFARRAY, KIND_VALARRAY):
+            return max(self._detail(hdr) * 2, MIN_PAYLOAD)
         if kind == KIND_STRING:
             # detail is the true character count; the block is rounded up so
             # that the next header stays word-aligned.
@@ -535,6 +543,40 @@ class QuinVM:
         for off in range(0, max(payload, MIN_PAYLOAD), 2):
             self._write_word(addr + off, 0)
         return addr
+
+    def _alloc_array(self, count: int, holds_refs: bool) -> int:
+        if count < 0:
+            raise VMError(f"Cannot build an array of {count} elements")
+        if count > 0x7FFF:
+            raise VMError(f"Array of {count} elements is too long")
+        kind = KIND_REFARRAY if holds_refs else KIND_VALARRAY
+        addr = self._reserve(count * 2, kind, count)
+        # Reused memory is dirty, and in a KIND_REFARRAY a stale word would be
+        # traced as a live reference.
+        for off in range(0, max(count * 2, MIN_PAYLOAD), 2):
+            self._write_word(addr + off, 0)
+        return addr
+
+    def _array_at(self, ref: int, op_name: str):
+        """`(payload address, element count, holds references)` for an array
+        reference, refusing anything that is not one."""
+        if ref == NULL_ADDR:
+            raise VMError(f"Null reference in {op_name}")
+        hdr = ref - HEADER_BYTES
+        if hdr < HEAP_START:
+            raise VMError(f"Value at {ref} is not an array")
+        kind = self._kind(hdr)
+        if kind not in (KIND_REFARRAY, KIND_VALARRAY):
+            raise VMError(f"Value at {ref} is not an array")
+        return ref, self._detail(hdr), kind == KIND_REFARRAY
+
+    def _element_addr(self, ref: int, index: int, op_name: str):
+        """`(address of the element, whether it holds a reference)`."""
+        start, count, holds_refs = self._array_at(ref, op_name)
+        if index < 0 or index >= count:
+            raise VMError(
+                f"Array index out of bounds: index={index}, length={count}")
+        return start + index * 2, holds_refs
 
     def _alloc_raw(self, size: int) -> int:
         if size < 0:
@@ -706,10 +748,14 @@ class QuinVM:
             # but never traced: nothing in the language can put a reference
             # inside one, which is what dropping heapptr - heapptr and
             # address-of on references buys.
-            if self._kind(hdr) == KIND_STRUCT:
+            kind = self._kind(hdr)
+            if kind == KIND_STRUCT:
                 layout = self.structs[self._detail(hdr)]
                 for off in layout.ref_offsets:
                     pending.append(self._read_word(start + off * 2))
+            elif kind == KIND_REFARRAY:
+                for off in range(0, self._detail(hdr) * 2, 2):
+                    pending.append(self._read_word(start + off))
 
     def _plan_compaction(self) -> Dict[int, int]:
         """Decide where every surviving object will live once gaps are closed.
@@ -767,11 +813,16 @@ class QuinVM:
             self.variants[i] = moved(addr)
 
         for hdr in self._blocks():
-            if not self._is_marked(hdr) or self._kind(hdr) != KIND_STRUCT:
+            if not self._is_marked(hdr):
                 continue
+            kind = self._kind(hdr)
             start = hdr + HEADER_BYTES
-            for off in self.structs[self._detail(hdr)].ref_offsets:
-                self._write_word(start + off * 2, moved(self._read_word(start + off * 2)))
+            if kind == KIND_STRUCT:
+                for off in self.structs[self._detail(hdr)].ref_offsets:
+                    self._write_word(start + off * 2, moved(self._read_word(start + off * 2)))
+            elif kind == KIND_REFARRAY:
+                for off in range(0, self._detail(hdr) * 2, 2):
+                    self._write_word(start + off, moved(self._read_word(start + off)))
 
     def _slide(self, forward: Dict[int, int]):
         """Move each surviving object down into the space the dead vacated.
@@ -1253,6 +1304,26 @@ class QuinVM:
 
             elif op is OpCode.PANIC:
                 raise VMError(self._string_text(self._pop()))
+
+            elif op is OpCode.NEW_ARRAY:
+                self._push(self._alloc_array(to_signed(self._pop()), arg == 1), True)
+
+            elif op is OpCode.ARRAY_LEN:
+                self._push(self._array_at(self._pop(), "ARRAY_LEN")[1])
+
+            elif op is OpCode.ARRAY_GET:
+                index = to_signed(self._pop())
+                # Whether the element is a reference is the array's own answer,
+                # read back out of the header the collector reads.
+                addr, holds_refs = self._element_addr(
+                    self._pop(), index, "ARRAY_GET")
+                self._push(self._read_word(addr), holds_refs)
+
+            elif op is OpCode.ARRAY_SET:
+                value = self._pop()
+                index = to_signed(self._pop())
+                addr, _ = self._element_addr(self._pop(), index, "ARRAY_SET")
+                self._write_word(addr, value)
 
             elif op is OpCode.ALLOC_TYPED:
                 self._push(self._alloc_struct(int(arg)), True)

@@ -15,6 +15,13 @@ def get_builtins() -> Dict[str, BuiltinSig]:
         # Shape checking for these two happens in sema/codegen.
         "array_push": (["int", "int", "int"], "int"),
         "array_pop":  (["int", "int"], "int"),
+        # Heap arrays. Their real signatures name the element type -- array_new
+        # returns Array<T> and array_get yields T -- which this table has no way
+        # to spell, so sema types them and these entries carry only the name and
+        # the arity, exactly as array_push and array_pop do above. Reading and
+        # writing elements is the a[i] syntax rather than a builtin.
+        "array_new":  (["int"], "int"),
+        "array_len":  (["int"], "int"),
         "ct_eq":      (["int", "int"], "bool"),
         # ct_select(mask, x, y) returns x when mask != 0, else y; mask is
         # meant to be 0 or 1.

@@ -111,6 +111,7 @@ fn main(): int {
 | `heapptr` | An address in the heap, produced by `alloc`. See [Heap](#heap-alloc--heap_load--heap_store). |
 | `void` | No value. Only valid as a return type. |
 | `int[N]` | Fixed-size array of `N` ints in the current frame. `N` must be a positive integer literal. |
+| `Array<T>` | Fixed-length array of `T` on the heap. One word: a reference, like a struct. Its length lives in the object, not the type. See [Heap arrays](#heap-arrays). |
 | `fn(T, ...): R` | A function taking those parameter types and returning `R`. One word: an index into the function table, not a heap address. See [Functions as values](#functions-as-values). |
 | a struct name | A reference to a heap object of that struct type. See [Structs](#structs). |
 
@@ -130,7 +131,27 @@ a = b;                       // arrays cannot be assigned as a whole
 println(a);                  // arrays have no value form
 ```
 
-An array is zeroed at declaration and filled element by element. `array_push` / `array_pop`, indexing, and `&a[i]` all require the array to be a **named local**.
+An array is zeroed at declaration and filled element by element. `array_push` / `array_pop`, indexing, and `@a[i]` all require the array to be a **named local**.
+
+None of those restrictions apply to `Array<T>`, which is a heap object.
+
+### Heap arrays
+
+```quin
+let rows: Array<str> = array_new(3);
+rows[0] = "first";
+println(rows[0]);
+println(array_len(rows));
+
+let grid: Array<Array<int>> = array_new(2);   // arrays nest
+```
+
+- Built with `array_new(n)`, which takes its element type from what it initialises: a declaration with an `Array<T>` annotation, an assignment to something already typed, a struct-literal field, or a `return`. With none of those, it is a semantic error.
+- The element type must be one word wide. `Array<float>` is refused, as is `Array<int[N]>` — a frame array is not a heap value.
+- Elements are zeroed at construction. Indexing uses the same `a[i]` syntax as `int[N]`.
+- Every index is checked at run time against the length in the object's header. There is no compile-time check, because there is no length in the type.
+- `@a[i]` is refused: an element has no frame address.
+- Whether the collector traces the elements is decided by the array's heap kind, set when it is allocated from the element type. An `Array<str>` is traced; an `Array<int>` never is.
 
 ## Statements
 
@@ -591,6 +612,8 @@ Always available and lowered directly by the compiler; they cannot be shadowed b
 | --- | --- |
 | `array_push(xs: int[N], len: int, value: int): int` | Write `value` at `xs[len]`, return `len + 1`. |
 | `array_pop(xs: int[N], len: int): int` | Return `xs[len - 1]`. Does not update `len`. |
+| `array_new(n: int): Array<T>` | A zeroed heap array of `n` elements. `T` comes from the context; see [Heap arrays](#heap-arrays). |
+| `array_len(a: Array<T>): int` | The element count, read from the object's header. |
 | `load16(p: ptr): int` | Read the word at `p`. |
 | `store16(p: ptr, value: int): void` | Write `value` at `p`. |
 | `memcpy(dst: ptr, src: ptr, count: int): void` | Copy `count` slots. |

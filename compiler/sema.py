@@ -6,6 +6,7 @@ from .compiler_types import (
     Type, Int, Str, Float, Void, Bool, Ptr, HeapPtr, Null, StructInfo, StructField,
     EnumInfo, VariantInfo, is_enum_type,
     type_from_name, is_array_type, array_length, is_struct_type, is_func_type, func_type, is_reference_type,
+    is_array_obj_type,
     assignable, comparable, word_count, BUILTIN_TYPES, UnknownTypeError,
 )
 from .builtins import get_builtins
@@ -403,7 +404,7 @@ class SemanticAnalyzer:
         if isinstance(st, A.VarDecl):
             var_type = self._resolve_type(st.type_name, st.line, st.col) if st.type_name else None
             if st.init is not None:
-                init_t = self._analyze_expr(st.init, scope)
+                init_t = self._analyze_expr(st.init, scope, var_type)
                 if var_type is None:
                     if init_t == Null:
                         raise SemanticError(
@@ -439,23 +440,33 @@ class SemanticAnalyzer:
                         f"assign to its elements instead",
                         st.target.line, st.target.col,
                     )
-                val_t = self._analyze_expr(st.value, scope)
+                val_t = self._analyze_expr(st.value, scope, sym.type)
                 if not assignable(sym.type, val_t):
                     raise SemanticError(f"Cannot assign {val_t} to {sym.type} variable '{st.target.name}'", st.target.line, st.target.col)
             elif isinstance(st.target, A.Index):
                 arr_t = self._analyze_expr(st.target.array, scope)
-                self._validate_index(
-                    arr_t, st.target.index, scope,
-                    "Index target must be an int[N] array",
-                    st.target.line, st.target.col,
-                )
-                val_t = self._analyze_expr(st.value, scope)
-                if val_t != Int:
-                    raise SemanticError("Array elements must be int", st.line, st.col)
+                if is_array_obj_type(arr_t):
+                    self._check_element_index(st.target.index, scope,
+                                              st.target.line, st.target.col)
+                    val_t = self._analyze_expr(st.value, scope, arr_t.element)
+                    if not assignable(arr_t.element, val_t):
+                        raise SemanticError(
+                            f"Cannot assign {val_t} to an element of {arr_t}",
+                            st.line, st.col,
+                        )
+                else:
+                    self._validate_index(
+                        arr_t, st.target.index, scope,
+                        "Index target must be an int[N] array",
+                        st.target.line, st.target.col,
+                    )
+                    val_t = self._analyze_expr(st.value, scope)
+                    if val_t != Int:
+                        raise SemanticError("Array elements must be int", st.line, st.col)
             elif isinstance(st.target, A.FieldAccess):
                 # Typing the target validates the struct and the field name.
                 field_t = self._analyze_expr(st.target, scope)
-                val_t = self._analyze_expr(st.value, scope)
+                val_t = self._analyze_expr(st.value, scope, field_t)
                 if not assignable(field_t, val_t):
                     raise SemanticError(
                         f"Cannot assign {val_t} to field '{st.target.field}' of type {field_t}",
@@ -478,7 +489,7 @@ class SemanticAnalyzer:
             if ret_type != Void and st.value is None:
                 raise SemanticError(f"Expected return value of type {ret_type}", st.line, st.col)
             if st.value is not None:
-                val_t = self._analyze_expr(st.value, scope)
+                val_t = self._analyze_expr(st.value, scope, ret_type)
                 if not assignable(ret_type, val_t):
                     raise SemanticError(f"Return type mismatch: expected {ret_type}, got {val_t}", st.line, st.col)
                 if self._current_function == "main" and ret_type == Int:
@@ -815,9 +826,24 @@ class SemanticAnalyzer:
                 line, col,
             )
 
+    def _check_element_index(self, idx_expr: A.Expr, scope: Scope, line: int, col: int):
+        """Type the index of an Array<T> element access."""
+        if self._analyze_expr(idx_expr, scope) != Int:
+            raise SemanticError("Array index must be int", line, col)
+
     def _validate_index(self, arr_t: Type, idx_expr: A.Expr, scope: Scope, not_array_msg: str, line: int, col: int):
         """Shared by reads, assignment targets and address-of, so a literal
-        index out of range is caught the same way in all three."""
+        index out of range is caught the same way in all three.
+
+        Only int[N] reaches here. An Array<T> is typed where it is used, having
+        no compile-time length to check an index against.
+        """
+        if is_array_obj_type(arr_t):
+            raise SemanticError(
+                f"{arr_t} is a heap object, not a frame array: its elements "
+                f"have no frame address to take",
+                line, col,
+            )
         if not is_array_type(arr_t):
             raise SemanticError(not_array_msg, line, col)
         idx_t = self._analyze_expr(idx_expr, scope)
@@ -832,7 +858,17 @@ class SemanticAnalyzer:
                     line, col,
                 )
 
-    def _analyze_expr(self, e: A.Expr, scope: Scope) -> Type:
+    def _analyze_expr(self, e: A.Expr, scope: Scope,
+                      expected: Optional[Type] = None) -> Type:
+        """Type one expression.
+
+        `expected` is the type the surrounding context requires, passed only by
+        the handful of places that know one: a declaration with an annotation,
+        an assignment to something already typed, a return. Almost nothing reads
+        it -- array_new is the one construct whose type cannot be recovered from
+        its arguments -- and it is never forwarded implicitly, so a nested
+        expression can never inherit an expectation that was not meant for it.
+        """
         if isinstance(e, A.Literal):
             if e.value is None:
                 self.ctx.set_type(e, Null)
@@ -1023,6 +1059,12 @@ class SemanticAnalyzer:
             raise SemanticError(f"Unknown operator {e.op}", e.line, e.col)
         if isinstance(e, A.Index):
             arr_t = self._analyze_expr(e.array, scope)
+            if is_array_obj_type(arr_t):
+                # No compile-time bound to check against: the length is in the
+                # object, so every index is checked at run time.
+                self._check_element_index(e.index, scope, e.line, e.col)
+                self.ctx.set_type(e, arr_t.element)
+                return arr_t.element
             self._validate_index(arr_t, e.index, scope, "Indexing requires int[N] array", e.line, e.col)
             self.ctx.set_type(e, Int)
             return Int
@@ -1092,7 +1134,7 @@ class SemanticAnalyzer:
                         f"Struct '{info.name}' has no field '{fi.name}'", fi.line, fi.col
                     )
                 seen[fi.name] = True
-                val_t = self._analyze_expr(fi.value, scope)
+                val_t = self._analyze_expr(fi.value, scope, fld.type)
                 if not assignable(fld.type, val_t):
                     raise SemanticError(
                         f"Field '{fi.name}' expects {fld.type}, got {val_t}", fi.line, fi.col
@@ -1124,6 +1166,29 @@ class SemanticAnalyzer:
                 # thing as a literal index and gets caught here rather than at
                 # run time. Anything computed is checked by BOUNDS_CHECK.
                 self._check_const_length(arr_t, e.args[1], "array_push", 0, e.line, e.col)
+                self.ctx.set_type(e, Int)
+                return Int
+            if e.callee == "array_new":
+                if len(e.args) != 1:
+                    raise SemanticError("array_new expects 1 argument", e.line, e.col)
+                if self._analyze_expr(e.args[0], scope) != Int:
+                    raise SemanticError("array_new length must be int", e.line, e.col)
+                if not is_array_obj_type(expected):
+                    raise SemanticError(
+                        "Cannot tell what array_new builds here: nothing says "
+                        "what its elements are. Annotate what it initialises, "
+                        "as in 'let a: Array<str> = array_new(8);'",
+                        e.line, e.col,
+                    )
+                self.ctx.set_type(e, expected)
+                return expected
+            if e.callee == "array_len":
+                if len(e.args) != 1:
+                    raise SemanticError("array_len expects 1 argument", e.line, e.col)
+                arr_t = self._analyze_expr(e.args[0], scope)
+                if not is_array_obj_type(arr_t):
+                    raise SemanticError(
+                        f"array_len expects an Array<T>, got {arr_t}", e.line, e.col)
                 self.ctx.set_type(e, Int)
                 return Int
             if e.callee == "array_pop":

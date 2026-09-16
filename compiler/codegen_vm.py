@@ -7,7 +7,7 @@ from .bytecode import OpCode, Instruction, Bytecode, SourceMap, SourceMapBuilder
 from .sema import Context, Symbol
 from .compiler_types import (
     Int, Str, Bool, Float, Void, array_length, is_reference_type, word_count,
-    VariantInfo,
+    is_array_obj_type, VariantInfo,
 )
 
 
@@ -345,6 +345,15 @@ class CodeGenVM:
                 self.code.append(Instruction(
                     OpCode.STORE_LOCAL_F if self._is_float(st.value, ctx) else OpCode.STORE_LOCAL,
                     slot.index))
+            elif (isinstance(st.target, A.Index)
+                  and is_array_obj_type(ctx.get_type(st.target.array))):
+                # Emitted in source order, which is the order ARRAY_SET pops in.
+                self._emit_expr(st.target.array, layout, ctx)
+                outer = self._enter(st.target)
+                self._emit_expr(st.target.index, layout, ctx)
+                self._leave(outer)
+                self._emit_expr(st.value, layout, ctx)
+                self.code.append(Instruction(OpCode.ARRAY_SET))
             elif isinstance(st.target, A.Index):
                 slot = self._array_slot(st.target.array, layout, ctx)
                 # STORE_LOCAL_IDX pops the index, then the value.
@@ -730,6 +739,13 @@ class CodeGenVM:
                 raise CodegenError(f"[{e.line}:{e.col}] Unknown unary operator '{e.op}'")
         elif isinstance(e, A.Binary):
             self._emit_binary(e, layout, ctx)
+        elif isinstance(e, A.Index) and is_array_obj_type(ctx.get_type(e.array)):
+            # The bound is in the object, so there is no BOUNDS_CHECK operand to
+            # emit: ARRAY_GET reads the length from the header it is already
+            # holding.
+            self._emit_expr(e.array, layout, ctx)
+            self._emit_expr(e.index, layout, ctx)
+            self.code.append(Instruction(OpCode.ARRAY_GET))
         elif isinstance(e, A.Index):
             slot = self._array_slot(e.array, layout, ctx)
             self._emit_expr(e.index, layout, ctx)
@@ -1009,6 +1025,21 @@ class CodeGenVM:
             # with an over-long length.
             self.code.append(Instruction(OpCode.BOUNDS_CHECK, slot.length))
             self.code.append(Instruction(OpCode.LOAD_LOCAL_IDX, slot.index))
+            return
+
+        # A heap array. Which kind to allocate is settled here, from the
+        # element type sema resolved, and written into the object's header --
+        # after which the collector reads the header and never asks again.
+        if name == "array_new" and len(e.args) == 1:
+            element = ctx.get_type(e).element
+            self._emit_expr(e.args[0], layout, ctx)
+            self.code.append(Instruction(OpCode.NEW_ARRAY,
+                                         1 if is_reference_type(element) else 0))
+            return
+
+        if name == "array_len" and len(e.args) == 1:
+            self._emit_expr(e.args[0], layout, ctx)
+            self.code.append(Instruction(OpCode.ARRAY_LEN))
             return
 
         # int <-> float, the only conversions between them.

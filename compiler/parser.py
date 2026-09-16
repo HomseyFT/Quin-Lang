@@ -158,6 +158,39 @@ class Parser:
         ret = self._type_name() if self._match(TokenType.COLON) else "void"
         return f"fn({','.join(params)}):{ret}"
 
+    def _type_arguments(self, base: str) -> str:
+        """`<T, ...>` after a type name, already consumed the `<`.
+
+        Canonicalised without spaces, as _function_type_name is, so that one
+        type has one spelling. Which names accept arguments is not decided here
+        -- `Foo<int>` parses and then fails to resolve, which is the error the
+        programmer wants either way.
+        """
+        args = [self._type_name()]
+        while self._match(TokenType.COMMA):
+            args.append(self._type_name())
+        self._close_type_arguments()
+        return f"{base}<{','.join(args)}>"
+
+    # A '>' that closes a type argument list may have been lexed as the start of
+    # something longer: '>>' is the shift operator and '>=' a comparison. The
+    # lexer cannot tell, because whether it is inside a type is not knowable one
+    # character at a time. So the closing '>' is taken here and the remainder
+    # put back for whoever wants it -- another close for '>>', an '=' for '>='.
+    _SPLIT_ON_CLOSE = {
+        TokenType.SHR: (TokenType.GREATER, ">"),
+        TokenType.GREATER_EQUAL: (TokenType.EQUAL, "="),
+    }
+
+    def _close_type_arguments(self) -> None:
+        rest = self._SPLIT_ON_CLOSE.get(self._peek().type)
+        if rest is not None:
+            kind, lexeme = rest
+            tok = self._peek()
+            self.tokens[self.current] = Token(kind, lexeme, tok.line, tok.col + 1)
+            return
+        self._consume(TokenType.GREATER, "Expected '>' after type arguments")
+
     def _type_name(self) -> str:
         # Before the rest: `fn` is a keyword, so it never reaches the
         # identifier fallback that would read it as a struct name.
@@ -178,6 +211,8 @@ class Parser:
         else:
             tok = self._consume(TokenType.IDENTIFIER, "Expected type name")
             base = tok.lexeme
+            if self._match(TokenType.LESS):
+                return self._type_arguments(base)
 
         if base == "int" and self._match(TokenType.LEFT_BRACKET):
             num_tok = self._consume(TokenType.NUMBER, "Expected array size after '['")

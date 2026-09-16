@@ -132,6 +132,56 @@ class TestRoundTrip(RoundTripTestCase):
         self.assertIn("café ÿ", back.strings.values())
 
 
+class TestHeapArraysNeedNoFormatChange(RoundTripTestCase):
+    """Array<T> added a type and four opcodes and touched none of the format.
+
+    That is not an accident worth trusting on inspection: the element type rides
+    in the type-name strings the tables already carry, and an array is not in the
+    struct layout table at all. If any of that stops being true, this fails and
+    the format version has to move.
+    """
+
+    SOURCE = """
+struct Box { items: Array<str> }
+
+fn fill(b: Box): void { b.items[0] = "kept"; }
+
+fn main(): int {
+    let b: Box = Box { items: array_new(2) };
+    let counts: Array<int> = array_new(3);
+    counts[0] = array_len(b.items);
+    fill(b);
+    println(b.items[0]);
+    println(counts[0]);
+    return 0;
+}
+"""
+
+    def test_the_array_opcodes_survive(self):
+        program, back = self.round_trip(self.SOURCE)
+        self.assertEqual(back.code, program.code)
+        self.assertIn(OpCode.NEW_ARRAY, [i.op for i in back.code])
+
+    def test_the_element_type_comes_back_in_the_type_names(self):
+        _, back = self.round_trip(self.SOURCE)
+        box = next(s for s in back.structs if s.name == "Box")
+        self.assertEqual([f.type_name for f in box.fields], ["Array<str>"])
+        main = next(f for f in back.functions if f.name == "main")
+        declared = {local.name: local.type_name for local in main.locals_}
+        self.assertEqual(declared["counts"], "Array<int>")
+
+    def test_an_array_is_not_in_the_struct_table(self):
+        _, back = self.round_trip(self.SOURCE)
+        self.assertEqual([s.name for s in back.structs if "Array" in s.name], [])
+
+    def test_the_gc_tables_survive(self):
+        program, back = self.round_trip(self.SOURCE)
+        for before, after in zip(program.structs, back.structs):
+            self.assertEqual(after.ref_offsets, before.ref_offsets)
+        for before, after in zip(program.functions, back.functions):
+            self.assertEqual(after.ref_slots, before.ref_slots)
+
+
 class TestStripping(RoundTripTestCase):
     def test_the_running_tables_are_all_still_there(self):
         program, back = self.round_trip(debug=False)

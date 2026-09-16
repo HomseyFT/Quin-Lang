@@ -145,6 +145,17 @@ class OpCode(Enum):
     # runs is not known until it does.
     CALL_INDIRECT = 79     # pop a function index, then call it
 
+    # Heap arrays. The length is read from the object's header rather than
+    # carried as an operand, which is the difference from BOUNDS_CHECK: an
+    # int[N] has its length in its type, an Array<T> only at run time.
+    # NEW_ARRAY's operand picks the heap kind, and the kind is what the
+    # collector consults -- so an array is traced or not by what it is, never
+    # by what the code that reads it believes.
+    NEW_ARRAY = 80         # operand: 1 if elements are references; pop the length
+    ARRAY_LEN = 81         # pop an array, push its element count
+    ARRAY_GET = 82         # pop an index, pop an array, push the element
+    ARRAY_SET = 83         # pop a value, pop an index, pop an array
+
 
 Operand = Union[int, None]
 

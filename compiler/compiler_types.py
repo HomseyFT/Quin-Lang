@@ -50,6 +50,10 @@ ARRAY_PREFIX = "int["
 # A function type is spelled fn(T, ...): R, and canonicalised to fn(T,...):R.
 FUNC_PREFIX = "fn("
 
+# A heap array is spelled Array<T>. Note the capital: int[N] is the other array
+# and the two are not the same thing at all.
+ARRAY_OBJ_PREFIX = "Array<"
+
 
 @dataclass(frozen=True)
 class StructType(Type):
@@ -176,6 +180,29 @@ def func_type(params, ret: Type) -> FuncType:
     return FuncType(spelling, 2, params, ret)
 
 
+@dataclass(frozen=True)
+class ArrayObjType(Type):
+    """A reference to a fixed-length array of elements on the heap: one word,
+    like any other reference.
+
+    The other array, int[N], lives in a frame. It cannot cross a function
+    boundary, cannot be a field, and its length is part of its type. This one is
+    an object: it is passed and returned by reference, survives the frame that
+    built it, and carries its length in its heap header, so the bounds check
+    reads the object rather than a compile-time constant.
+
+    The element type is held here for the compiler, but nothing at run time
+    consults it. Whether the collector traces an array is decided by the
+    object's own header, which is what keeps a wrong guess in codegen from
+    becoming a heap the collector reads incorrectly.
+    """
+    element: Type = Int
+
+
+def array_obj_type(element: Type) -> ArrayObjType:
+    return ArrayObjType(f"Array<{element.name}>", 2, element)
+
+
 def word_count(t: Type) -> int:
     """How many 16-bit slots a value of this type occupies.
 
@@ -192,6 +219,10 @@ def is_func_type(t: Type) -> bool:
     return isinstance(t, FuncType)
 
 
+def is_array_obj_type(t: Type) -> bool:
+    return isinstance(t, ArrayObjType)
+
+
 def is_struct_type(t: Type) -> bool:
     return isinstance(t, StructType)
 
@@ -203,14 +234,16 @@ def is_enum_type(t: Type) -> bool:
 def is_reference_type(t: Type) -> bool:
     """Whether values of this type are heap addresses the GC must trace. A str
     counts: a str slot roots its string, and a str field must be traced."""
-    return is_struct_type(t) or is_enum_type(t) or t == HeapPtr or t == Str
+    return (is_struct_type(t) or is_enum_type(t) or is_array_obj_type(t)
+            or t == HeapPtr or t == Str)
 
 
 def is_nullable(t: Type) -> bool:
     """Whether null may stand in for a value of this type. Not the same
     question as is_reference_type: a string is a heap reference, but an
     uninitialised str is the empty string, so there is no null string."""
-    return is_struct_type(t) or is_enum_type(t) or t == HeapPtr
+    return (is_struct_type(t) or is_enum_type(t) or is_array_obj_type(t)
+            or t == HeapPtr)
 
 
 def assignable(target: Type, value: Type) -> bool:
@@ -302,6 +335,22 @@ def func_signature_from_name(name: Optional[str]):
     return params, ret_name
 
 
+def element_type_from_name(name: Optional[str]) -> Optional[str]:
+    """T for a type name of the form `Array<T>`, None if it isn't one.
+
+    There is exactly one type argument, so it is the whole of what the angle
+    brackets enclose and no depth counting is needed: `Array<Array<int>>` and
+    `Array<fn(int):int>` both fall out of taking the middle.
+    """
+    if (not isinstance(name, str) or not name.startswith(ARRAY_OBJ_PREFIX)
+            or not name.endswith(">")):
+        return None
+    inner = name[len(ARRAY_OBJ_PREFIX):-1].strip()
+    if not inner:
+        raise UnknownTypeError(f"Missing element type in '{name}'")
+    return inner
+
+
 def type_from_name(name: str, structs: Optional[Dict[str, "StructInfo"]] = None,
                    enums: Optional[Dict[str, "EnumInfo"]] = None) -> Type:
     if not isinstance(name, str):
@@ -326,6 +375,23 @@ def type_from_name(name: str, structs: Optional[Dict[str, "StructInfo"]] = None,
         if is_array_type(ret):
             raise UnknownTypeError(f"An array is not a return type in '{name}'")
         return func_type(params, ret)
+    element_name = element_type_from_name(name)
+    if element_name is not None:
+        element = type_from_name(element_name, structs, enums)
+        # An array's header counts elements, not words, so an element has to be
+        # one word wide. That is the same reason there are no float arrays of
+        # the int[N] kind, arrived at from the other direction.
+        if element == Void:
+            raise UnknownTypeError(f"'void' is not an element type in '{name}'")
+        if element == Float:
+            raise UnknownTypeError(
+                f"'float' is two words wide and an array counts elements, "
+                f"so '{name}' is not a type")
+        if is_array_type(element):
+            raise UnknownTypeError(
+                f"An int[N] lives in a frame, not on the heap, so '{name}' "
+                f"is not a type; use Array<Array<...>> instead")
+        return array_obj_type(element)
     if name in BUILTIN_TYPES:
         return BUILTIN_TYPES[name]
     if structs and name in structs:
