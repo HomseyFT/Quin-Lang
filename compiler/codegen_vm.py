@@ -13,6 +13,10 @@ from .compiler_types import (
 
 COMPARISONS = ("==", "!=", "<", "<=", ">", ">=")
 
+# The largest struct or variant type id a heap header can hold: the VM writes
+# it into one 16-bit word.
+MAX_TYPE_ID = 0xFFFF
+
 
 @dataclass(frozen=True)
 class CompiledProgram:
@@ -196,15 +200,21 @@ class CodeGenVM:
     # -- entry point -----------------------------------------------------
 
     def generate(self, program: A.Program, ctx: Context):
+        # What sema says to emit, not what the program declared: a generic
+        # declaration is a template and produces no code, while each of its
+        # instantiations is an ordinary function with a mangled name. Nothing
+        # below here knows the difference.
+        emit = ctx.functions_to_emit
+
         # Register every function before emitting any of them, so that a call
         # to a function defined later in the file resolves correctly.
-        for fn in program.functions:
+        for fn in emit:
             if fn.name in self.func_name_to_index:
                 raise CodegenError(f"[{fn.line}:{fn.col}] Duplicate function '{fn.name}'")
             self.func_name_to_index[fn.name] = len(self.functions)
             self.functions.append(self._build_layout(fn, ctx))
 
-        for fn, layout in zip(program.functions, self.functions):
+        for fn, layout in zip(emit, self.functions):
             layout.entry_pc = len(self.code)
             self._emit_function(fn, layout, ctx)
 
@@ -221,7 +231,16 @@ class CodeGenVM:
         # with a type id, and the collector reads its ref_offsets the same way.
         # That is the whole reason sum types cost the collector nothing.
         described = list(ctx.structs.values()) + list(ctx.variants.values())
-        layouts = [None] * (max((i.type_id for i in described), default=-1) + 1)
+        highest = max((i.type_id for i in described), default=-1)
+        if highest > MAX_TYPE_ID:
+            # A type id is written into a heap header word, and the VM masks to
+            # 16 bits, so one past this would silently produce an object
+            # claiming to be struct 0. Nobody declares this many by hand;
+            # monomorphization is the first thing that generates them.
+            raise CodegenError(
+                f"{highest + 1} struct and variant types, but a heap header "
+                f"carries a 16-bit type id, so only {MAX_TYPE_ID + 1} fit")
+        layouts = [None] * (highest + 1)
         for info in described:
             layouts[info.type_id] = StructLayout(
                 name=info.name,
@@ -784,9 +803,12 @@ class CodeGenVM:
         return fld
 
     def _emit_struct_lit(self, e: A.StructLit, layout: FunctionLayout, ctx: Context):
-        info = ctx.structs.get(e.struct_name)
+        # The type sema gave the literal, not the name written: a bare
+        # `Vec { ... }` inside a template was resolved to one instantiation.
+        name = ctx.get_type(e).name
+        info = ctx.structs.get(name)
         if info is None:
-            raise CodegenError(f"[{e.line}:{e.col}] Unknown struct '{e.struct_name}'")
+            raise CodegenError(f"[{e.line}:{e.col}] Unknown struct '{name}'")
         # ALLOC_TYPED leaves the new object's address on the stack; each field
         # store consumes a copy of it, so the address survives to be the value
         # of the whole expression.
@@ -1152,6 +1174,8 @@ class CodeGenVM:
             self.code.append(Instruction(OpCode.PUSH_INT, 0))  # void result
             return
 
+        # A generic call names a template; sema says which instantiation.
+        name = ctx.call_target.get(id(e), name)
         if name not in self.func_name_to_index:
             raise CodegenError(f"[{e.line}:{e.col}] Call to unknown function '{name}'")
         for arg_expr in e.args:

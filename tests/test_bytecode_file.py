@@ -182,6 +182,56 @@ fn main(): int {
             self.assertEqual(after.ref_slots, before.ref_slots)
 
 
+class TestGenericsNeedNoFormatChange(RoundTripTestCase):
+    """Monomorphization added no run-time concept, only more entries.
+
+    A mangled name is a name, and an instantiated struct an ordinary layout with
+    its own type id. If either stops being true this fails, and the format
+    version has to move.
+    """
+
+    SOURCE = """
+struct Holder<T> { item: T }
+
+enum Option<T> { Some(T), None }
+
+fn wrap<T>(x: T): Holder<T> { return Holder { item: x }; }
+
+fn main(): int {
+    let a: Holder<int> = wrap(3);
+    let b: Holder<str> = wrap("three");
+    let o: Option<str> = Option::Some(b.item);
+    println(a.item);
+    match (o) {
+        Option::Some(s) => { println(s); }
+        Option::None => { println("none"); }
+    }
+    return 0;
+}
+"""
+
+    def test_the_code_survives(self):
+        program, back = self.round_trip(self.SOURCE)
+        self.assertEqual(back.code, program.code)
+
+    def test_mangled_names_come_back(self):
+        _, back = self.round_trip(self.SOURCE)
+        names = [f.name for f in back.functions]
+        self.assertIn("wrap<int>", names)
+        self.assertIn("wrap<str>", names)
+
+    def test_each_instantiation_keeps_its_own_layout(self):
+        _, back = self.round_trip(self.SOURCE)
+        layouts = {s.name: s for s in back.structs if s}
+        self.assertEqual(layouts["Holder<int>"].ref_offsets, ())
+        self.assertEqual(layouts["Holder<str>"].ref_offsets, (0,))
+
+    def test_a_template_is_absent(self):
+        _, back = self.round_trip(self.SOURCE)
+        self.assertNotIn("wrap", [f.name for f in back.functions])
+        self.assertNotIn("Holder", [s.name for s in back.structs if s])
+
+
 class TestStripping(RoundTripTestCase):
     def test_the_running_tables_are_all_still_there(self):
         program, back = self.round_trip(debug=False)

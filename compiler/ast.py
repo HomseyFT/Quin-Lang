@@ -1,6 +1,6 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from dataclasses import dataclass, field, fields
+from typing import Callable, List, Optional, Union
 
 @dataclass
 class Node:
@@ -35,6 +35,10 @@ class Binary(Expr):
 class Call(Expr):
     callee: str
     args: List[Expr]
+    # Type arguments written out, `f::<int, str>(x)`. Empty when the call names
+    # no generic function, or when its type arguments are inferred -- which is
+    # the usual case, so this is usually empty even for a generic call.
+    type_args: List[str] = field(default_factory=list)
 
 @dataclass
 class Index(Expr):
@@ -158,6 +162,10 @@ class Function(Node):
     params: List[Param]
     return_type: Optional[str]
     body: List[Stmt]
+    # The names this declaration binds, `<T, U>`. Empty for an ordinary
+    # declaration; a declaration with any is a template, instantiated per use
+    # rather than compiled as written.
+    type_params: List[str] = field(default_factory=list)
     # Which file declared it, stamped by the resolver when it merges includes.
     # A line number alone is ambiguous once a program spans files.
     source_file: str = field(default="", kw_only=True)
@@ -171,6 +179,10 @@ class FieldDef(Node):
 class StructDef(Node):
     name: str
     fields: List[FieldDef]
+    # The names this declaration binds, `<T, U>`. Empty for an ordinary
+    # declaration; a declaration with any is a template, instantiated per use
+    # rather than compiled as written.
+    type_params: List[str] = field(default_factory=list)
 
 @dataclass
 class VariantDef(Node):
@@ -183,6 +195,10 @@ class VariantDef(Node):
 class EnumDef(Node):
     name: str
     variants: List[VariantDef]
+    # The names this declaration binds, `<T, U>`. Empty for an ordinary
+    # declaration; a declaration with any is a template, instantiated per use
+    # rather than compiled as written.
+    type_params: List[str] = field(default_factory=list)
 
 @dataclass
 class Include(Node):
@@ -194,3 +210,50 @@ class Program(Node):
     functions: List[Function]
     structs: List[StructDef] = field(default_factory=list)
     enums: List[EnumDef] = field(default_factory=list)
+
+
+# Which fields hold a type name rather than a variable, field or function name.
+# Listed here, beside the declarations, so that adding a node carrying one is a
+# change in this file and nowhere else.
+_TYPE_NAME_FIELDS = {
+    Param: ("type_name",),
+    VarDecl: ("type_name",),
+    FieldDef: ("type_name",),
+    Function: ("return_type",),
+    StructLit: ("struct_name",),
+}
+
+_TYPE_NAME_LISTS = {
+    VariantDef: ("payload",),
+    Call: ("type_args",),
+}
+
+
+def substitute_types(node: Node, rewrite: Callable[[str], str]) -> None:
+    """Rewrite every type name in a tree, in place.
+
+    This is the whole of what instantiating a declaration does to its body: a
+    template is cloned and its type parameters replaced by what they were bound
+    to. Nothing else is touched -- a variable named T stays named T, and a match
+    arm still writes `Option::Some` whatever the enum was instantiated at,
+    because which instantiation it means comes from the subject's type.
+    """
+    for cls, names in _TYPE_NAME_FIELDS.items():
+        if isinstance(node, cls):
+            for name in names:
+                value = getattr(node, name)
+                if value is not None:
+                    setattr(node, name, rewrite(value))
+    for cls, names in _TYPE_NAME_LISTS.items():
+        if isinstance(node, cls):
+            for name in names:
+                setattr(node, name, [rewrite(v) for v in getattr(node, name)])
+
+    for f in fields(node):
+        value = getattr(node, f.name)
+        if isinstance(value, Node):
+            substitute_types(value, rewrite)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, Node):
+                    substitute_types(item, rewrite)

@@ -388,6 +388,54 @@ An element must be one word wide, so `Array<float>` is not a type — the header
 
 **The collector decides what to trace from the object, not from the code reading it.** An array whose elements are references gets a different heap kind from one whose elements are values, chosen when it is allocated and recorded in its header. Marking and compaction read that kind, so an `Array<str>` has every element traced and rewritten when its strings move, and an `Array<int>` is never traced at all — an `int` that happens to look like a heap address keeps nothing alive.
 
+### Generics
+
+A `fn`, `struct` or `enum` may take type parameters. A declaration with any is a **template**: it is never compiled as written, and each use with concrete arguments compiles a copy of it.
+
+```quin
+struct Vec<T> { data: Array<T>, len: int }
+
+enum Option<T> { Some(T), None }
+
+fn map<T, U>(v: Vec<T>, f: fn(T): U): Vec<U> {
+    let out: Vec<U> = vec_new(v.len);
+    for (let i = 0; i < v.len; i = i + 1) {
+        push(out, f(v.data[i]));
+    }
+    return out;
+}
+```
+
+**Nothing generic survives compilation.** `Vec<int>` and `Vec<str>` are two ordinary structs with two type ids and two field layouts; `map<int,str>` is an ordinary entry in the function table, and a backtrace names it that way. Only instantiations something actually reached are compiled — a template nobody uses costs nothing at all.
+
+That is also what lets the collector hold a different opinion about each one. A `Vec<str>` roots its elements and a `Vec<int>` has nothing to root, because they are separate layouts with separate `ref_offsets`; the same goes for `ref_slots` in `push<str>` against `push<int>`.
+
+#### Finding the type arguments
+
+Three sources, in order:
+
+```quin
+push(v, 3);                     // from the argument types
+let v: Vec<str> = vec_new(4);   // from the type it has to produce
+let e = vec_new::<str>(4);      // written out
+```
+
+The turbofish `::<T>` is needed only when the first two say nothing. It is spelled with `::` because in an expression `f<int>(x)` reads as two comparisons; in a *type* position no `::` is needed, so `Vec<int>` is written plainly. The same rule applies to a struct literal: `Vec { ... }` where the expected type says which, `Vec::<int> { ... }` where it does not.
+
+A variant of a generic enum is always written with the enum's declared name — `Option::Some(3)`, never `Option<int>::Some(3)`. Which instantiation is meant comes from the payload, or from the expected type when there is no payload to speak.
+
+#### When a template does not typecheck
+
+There are no bounds on a type parameter, so there is nothing to check a template's body against until it is instantiated. An error inside one therefore reports both ends: what is wrong, and the call that asked for it.
+
+```
+Semantic error: [3:47] Relational operators do not apply to struct references or null
+  in biggest<Point>
+  instantiated at examples/sort.ql:7:25
+```
+
+The trade is deliberate. Bounds would move that error to the call site, but they need a trait system to name what a bound *is*, which is a second large feature. Instantiation depth is capped so that a template instantiating itself at a larger type each time fails with the chain rather than exhausting memory.
+
 ### Structs
 
 A `struct` declares a heap object type. Declarations sit at the top level, beside functions, and may appear in any order relative to the code that uses them:
@@ -1125,6 +1173,8 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - A `ptr` does not outlive the frame it points into.
 - Collection is triggered only by allocation pressure or an explicit `gc()`. Every collection moves every surviving object that has somewhere lower to go.
 - `float` is 32-bit single precision, so it carries about seven significant digits. There are no float arrays of either kind — `float[N]` and `Array<float>` are both refused, because a float is two words wide and both arrays count elements. There is no exponent notation in literals, and no `@` on a float.
+- A type parameter carries no bounds, so a template's body is checked once per instantiation rather than once at its declaration. An error in a library template points at the library, with the instantiation chain saying which call reached it.
+- Two instantiations of one template are two functions in the compiled program. That is what makes the per-instantiation GC maps possible, and it means code size grows with the number of element types actually used.
 - An `Array<T>` element has no frame address, so `@a[0]` is refused on one. Its length is fixed at construction: growing means building a longer array and copying.
 - Comparing `str` values compares content, so ordering is lexicographic by byte. There is no case folding: `"Z" < "a"` is `true`.
 - The process exit code carries only the low byte of `main`'s return value. Compile and runtime errors use 2 and 3, which a program may also return; stderr is the unambiguous signal.

@@ -1,18 +1,42 @@
 from __future__ import annotations
+import copy
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 from . import ast as A
 from .compiler_types import (
     Type, Int, Str, Float, Void, Bool, Ptr, HeapPtr, Null, StructInfo, StructField,
     EnumInfo, VariantInfo, is_enum_type,
     type_from_name, is_array_type, array_length, is_struct_type, is_func_type, func_type, is_reference_type,
-    is_array_obj_type,
+    is_array_obj_type, generic_application, substitute_type_name, unify_type_name,
+    func_signature_from_name,
     assignable, comparable, word_count, BUILTIN_TYPES, UnknownTypeError,
 )
 from .builtins import get_builtins
 
 # A process exit code carries one byte, so only these values survive intact.
 EXIT_CODE_MAX = 255
+
+# How deep instantiation may go before it is called a mistake. A template that
+# instantiates itself at a larger type each time -- f<T> calling f<Vec<T>> --
+# terminates for no argument, and the honest failure is a message naming the
+# chain rather than an exhausted machine.
+MAX_INSTANTIATION_DEPTH = 32
+
+# How much of an instantiation chain to print, in lines of two per frame. The
+# innermost frames are the ones that explain the error; a deep chain is usually
+# a runaway, where every frame after the first few says the same thing.
+MAX_CHAIN_LINES = 6
+
+# How long a type name may get before a message abbreviates it. A runaway
+# instantiation builds names hundreds of characters wide, and the first sixty
+# say as much as all of them.
+MAX_NAME_IN_MESSAGE = 60
+
+
+def abbreviate(name: str) -> str:
+    if len(name) <= MAX_NAME_IN_MESSAGE:
+        return name
+    return name[:MAX_NAME_IN_MESSAGE] + "..."
 
 
 def wrap16(value: int) -> int:
@@ -69,16 +93,31 @@ class Diagnostic:
 
 
 class SemanticError(Exception):
-    def __init__(self, message: str, line: int = 0, col: int = 0):
+    """A rejected program, and -- for one found inside an instantiated template
+    -- the chain of instantiations that reached it.
+
+    With no bounds on a type parameter there is nothing to check a template's
+    body against until it is instantiated, so an error in `std/vec.ql` is
+    really an error about the call that asked for that instantiation. `notes`
+    carries that chain, so the message names both ends.
+    """
+
+    def __init__(self, message: str, line: int = 0, col: int = 0, notes=()):
         super().__init__(message)
         self.message = message
         self.line = line
         self.col = col
+        self.notes: List[str] = list(notes)
 
     def __str__(self) -> str:
+        head = self.message
         if self.line or self.col:
-            return f"[{self.line}:{self.col}] {self.message}"
-        return self.message
+            head = f"[{self.line}:{self.col}] {self.message}"
+        notes = self.notes
+        if len(notes) > MAX_CHAIN_LINES:
+            hidden = (len(notes) - MAX_CHAIN_LINES) // 2
+            notes = notes[:MAX_CHAIN_LINES] + [f"  ... and {hidden} more"]
+        return "\n".join([head, *notes])
 
 # eq=False so that two same-named variables in sibling scopes are distinct
 # symbols, and so that Symbol stays hashable by identity: codegen keys frame
@@ -175,6 +214,19 @@ class Context:
         # declares directly. Codegen releases these slots when the scope ends,
         # so an out-of-scope variable stops rooting its object.
         self.scope_refs: Dict[int, List[Symbol]] = {}
+        # Declarations with type parameters, kept out of the tables above.
+        # A template is never compiled as written: each use instantiates a copy
+        # under a mangled name, and it is the copy that reaches the tables.
+        self.generic_functions: Dict[str, A.Function] = {}
+        self.generic_structs: Dict[str, A.StructDef] = {}
+        self.generic_enums: Dict[str, A.EnumDef] = {}
+        # The functions codegen should emit, in order: the program's own, then
+        # every instantiation. Templates are absent, which is what keeps
+        # codegen from having to know what one is.
+        self.functions_to_emit: List[A.Function] = []
+        # id(Call) -> the mangled name the call resolves to, when that differs
+        # from what was written. `map(v, f)` is a call to `map<int,str>`.
+        self.call_target: Dict[int, str] = {}
         # Sema is the only pass that raises one today, but codegen receives
         # this Context too and could add its own.
         self.warnings: List[Diagnostic] = []
@@ -203,13 +255,167 @@ class SemanticAnalyzer:
         self._loop_depth = 0
         # The function being analyzed, so a return in main can be recognised.
         self._current_function = None
+        # The file it came from, so an instantiation can say where it was asked
+        # for. A template's own file is where the error is; the call site's is
+        # where the decision that caused it was made.
+        self._current_file = ""
+        # Instantiated bodies waiting to be analyzed, each with the chain of
+        # instantiations that reached it. A worklist rather than recursion:
+        # a template's body is checked after the call that asked for it is
+        # finished, so nothing has to save and restore the caller's frame.
+        self._pending: List[Tuple[A.Function, List[str]]] = []
+        # The chain in force, empty outside an instantiated body.
+        self._chain: List[str] = []
 
     def _resolve_type(self, name: str, line: int, col: int) -> Type:
         """Map a source-level type name onto a concrete Type, with location on failure."""
+        self._ensure_instantiated(name, line, col)
         try:
             return type_from_name(name, self.ctx.structs, self.ctx.enums)
         except UnknownTypeError as e:
-            raise SemanticError(str(e), line, col)
+            raise SemanticError(str(e), line, col, self._chain)
+
+    # -- instantiation ---------------------------------------------------
+    #
+    # A generic declaration is a template: it is never compiled as written, and
+    # a use with concrete arguments produces a copy of it under a mangled name
+    # -- `Vec<int>`, `map<int,str>`. Downstream of here nothing knows what a
+    # template is. A mangled name is an ordinary name, an instantiated struct an
+    # ordinary layout with its own type id and its own ref_offsets, and an
+    # instantiated function an ordinary entry in the function table.
+
+    def _ensure_instantiated(self, name, line: int, col: int) -> None:
+        """Instantiate every template a type spelling names, innermost first.
+
+        `Vec<Vec<int>>` needs `Vec<int>` to exist before it can be resolved, and
+        a function type may hide one anywhere in its signature.
+        """
+        if not isinstance(name, str):
+            return
+        try:
+            app = generic_application(name)
+        except UnknownTypeError as e:
+            raise SemanticError(str(e), line, col, self._chain)
+        if app is not None:
+            base, args = app
+            for arg in args:
+                self._ensure_instantiated(arg, line, col)
+            if base in self.ctx.generic_structs or base in self.ctx.generic_enums:
+                self._instantiate_type(base, args, name, line, col)
+            return
+        signature = func_signature_from_name(name)
+        if signature is not None:
+            for param in signature[0]:
+                self._ensure_instantiated(param, line, col)
+            self._ensure_instantiated(signature[1], line, col)
+
+    def _template_arity(self, template, base: str, args: List[str], line: int, col: int):
+        if len(args) == len(template.type_params):
+            return
+        raise SemanticError(
+            f"'{base}' takes {len(template.type_params)} type argument(s), "
+            f"got {len(args)}", line, col, self._chain)
+
+    def _instantiate_type(self, base: str, args: List[str], mangled: str,
+                          line: int, col: int) -> None:
+        if mangled in self.ctx.structs or mangled in self.ctx.enums:
+            return
+        self._check_depth(mangled, line, col)
+        struct_template = self.ctx.generic_structs.get(base)
+        if struct_template is not None:
+            self._template_arity(struct_template, base, args, line, col)
+            subs = dict(zip(struct_template.type_params, args))
+            clone = self._substituted(struct_template, subs, mangled)
+            # Registered before its fields are resolved, so that a self
+            # referencing template -- struct Node<T> { next: Node<T> } --
+            # terminates, exactly as a non-generic struct's two phases do.
+            info = StructInfo(mangled, type_id=self._next_type_id())
+            self.ctx.structs[mangled] = info
+            info.fields = self._struct_fields(clone, mangled)
+            return
+
+        enum_template = self.ctx.generic_enums[base]
+        self._template_arity(enum_template, base, args, line, col)
+        subs = dict(zip(enum_template.type_params, args))
+        clone = self._substituted(enum_template, subs, mangled)
+        info = EnumInfo(mangled)
+        self.ctx.enums[mangled] = info
+        for index, vd in enumerate(clone.variants):
+            qualified = f"{mangled}::{vd.name}"
+            variant = VariantInfo(qualified, type_id=self._next_type_id(),
+                                  enum_name=mangled, short_name=vd.name,
+                                  index=index)
+            self.ctx.variants[qualified] = variant
+            info.variants.append(variant)
+        for vd, variant in zip(clone.variants, info.variants):
+            variant.fields = self._variant_fields(vd, mangled)
+
+    def _substituted(self, template, subs: Dict[str, str], mangled: str):
+        """A copy of a declaration with its type parameters replaced.
+
+        The template is left untouched: it is instantiated again at other
+        arguments, and each copy owns its own nodes -- which is also what gives
+        every instantiation its own entry in the type tables sema keys by node
+        identity.
+        """
+        clone = copy.deepcopy(template)
+        clone.name = mangled
+        clone.type_params = []
+        A.substitute_types(clone, lambda n: substitute_type_name(n, subs))
+        return clone
+
+    def _check_depth(self, mangled: str, line: int, col: int) -> None:
+        if len(self._chain) // 2 < MAX_INSTANTIATION_DEPTH:
+            return
+        raise SemanticError(
+            f"Instantiation of '{abbreviate(mangled)}' is more than "
+            f"{MAX_INSTANTIATION_DEPTH} deep; a template that instantiates "
+            f"itself at a larger type each time never finishes",
+            line, col, self._chain)
+
+    def _instantiate_function(self, template: A.Function, subs: Dict[str, str],
+                              mangled: str, site: A.Expr) -> FunctionSig:
+        existing = self.ctx.functions.get(mangled)
+        if existing is not None:
+            return existing
+        self._check_depth(mangled, site.line, site.col)
+        clone = self._substituted(template, subs, mangled)
+        chain = [f"  in {abbreviate(mangled)}",
+                 f"  instantiated at {self._current_file or '<input>'}:"
+                 f"{site.line}:{site.col}"] + self._chain
+        outer, self._chain = self._chain, chain
+        try:
+            params = [self._resolve_type(p.type_name, p.line, p.col) for p in clone.params]
+            ret = (self._resolve_type(clone.return_type, clone.line, clone.col)
+                   if clone.return_type else Void)
+        finally:
+            self._chain = outer
+        # Registered before the body is queued, so a recursive template reaches
+        # this signature rather than instantiating itself forever.
+        sig = FunctionSig(mangled, params, ret)
+        self.ctx.functions[mangled] = sig
+        self._pending.append((clone, chain))
+        return sig
+
+    def _drain_instantiations(self) -> None:
+        """Analyze instantiated bodies until no new instantiation appears.
+
+        A body may instantiate more, so this is a queue rather than a pass over
+        a fixed list. Only what is reached is ever analyzed or emitted: a
+        template nobody uses costs nothing.
+        """
+        while self._pending:
+            clone, chain = self._pending.pop(0)
+            outer, self._chain = self._chain, chain
+            try:
+                self._analyze_function(clone)
+            except SemanticError as e:
+                if not e.notes:
+                    e.notes = chain
+                raise
+            finally:
+                self._chain = outer
+            self.ctx.functions_to_emit.append(clone)
 
     def _register_structs(self, program: A.Program):
         """Resolve struct declarations in two phases.
@@ -220,6 +426,11 @@ class SemanticAnalyzer:
         — expressible.
         """
         for sd in program.structs:
+            if sd.type_params:
+                if sd.name in self.ctx.generic_structs:
+                    raise SemanticError(f"Redefinition of struct '{sd.name}'", sd.line, sd.col)
+                self.ctx.generic_structs[sd.name] = sd
+                continue
             if sd.name in self.ctx.structs:
                 raise SemanticError(f"Redefinition of struct '{sd.name}'", sd.line, sd.col)
             if sd.name in BUILTIN_TYPES:
@@ -233,32 +444,39 @@ class SemanticAnalyzer:
             self.ctx.structs[sd.name] = StructInfo(sd.name, type_id=len(self.ctx.structs))
 
         for sd in program.structs:
-            info = self.ctx.structs[sd.name]
-            fields: List[StructField] = []
-            seen: Dict[str, bool] = {}
-            offset = 0
-            for f in sd.fields:
-                if f.name in seen:
-                    raise SemanticError(
-                        f"Duplicate field '{f.name}' in struct '{sd.name}'", f.line, f.col
-                    )
-                seen[f.name] = True
-                ft = self._resolve_type(f.type_name, f.line, f.col)
-                if is_array_type(ft):
-                    raise SemanticError(
-                        f"Field '{f.name}' cannot be an array; arrays live in a frame, "
-                        f"not in a heap object",
-                        f.line, f.col,
-                    )
-                if ft == Void:
-                    raise SemanticError(
-                        f"Field '{f.name}' cannot have type void", f.line, f.col
-                    )
-                fields.append(StructField(f.name, ft, offset))
-                # Offsets are word offsets, and a float field is two words
-                # wide, so this is a running total rather than the field index.
-                offset += word_count(ft)
-            info.fields = fields
+            if sd.type_params:
+                continue
+            self.ctx.structs[sd.name].fields = self._struct_fields(sd, sd.name)
+
+    def _struct_fields(self, sd: A.StructDef, owner: str) -> List[StructField]:
+        """Resolve a struct's declared fields. Shared with instantiation, so an
+        instantiated struct is checked by the same rules as a declared one."""
+        fields: List[StructField] = []
+        seen: Dict[str, bool] = {}
+        offset = 0
+        for f in sd.fields:
+            if f.name in seen:
+                raise SemanticError(
+                    f"Duplicate field '{f.name}' in struct '{owner}'",
+                    f.line, f.col, self._chain
+                )
+            seen[f.name] = True
+            ft = self._resolve_type(f.type_name, f.line, f.col)
+            if is_array_type(ft):
+                raise SemanticError(
+                    f"Field '{f.name}' cannot be an array; arrays live in a frame, "
+                    f"not in a heap object",
+                    f.line, f.col, self._chain,
+                )
+            if ft == Void:
+                raise SemanticError(
+                    f"Field '{f.name}' cannot have type void", f.line, f.col, self._chain
+                )
+            fields.append(StructField(f.name, ft, offset))
+            # Offsets are word offsets, and a float field is two words
+            # wide, so this is a running total rather than the field index.
+            offset += word_count(ft)
+        return fields
 
     def _next_type_id(self) -> int:
         """Structs and variants draw from one space: the collector indexes a
@@ -274,6 +492,11 @@ class SemanticAnalyzer:
         List) }` is expressible.
         """
         for ed in program.enums:
+            if ed.type_params:
+                if ed.name in self.ctx.generic_enums:
+                    raise SemanticError(f"Redefinition of enum '{ed.name}'", ed.line, ed.col)
+                self.ctx.generic_enums[ed.name] = ed
+                continue
             if ed.name in self.ctx.enums:
                 raise SemanticError(f"Redefinition of enum '{ed.name}'", ed.line, ed.col)
             if ed.name in self.ctx.structs:
@@ -306,28 +529,34 @@ class SemanticAnalyzer:
                 info.variants.append(variant)
 
         for ed in program.enums:
+            if ed.type_params:
+                continue
             for vd in ed.variants:
-                variant = self.ctx.variants[f"{ed.name}::{vd.name}"]
-                fields: List[StructField] = []
-                offset = 0
-                for position, type_name in enumerate(vd.payload):
-                    ft = self._resolve_type(type_name, vd.line, vd.col)
-                    if is_array_type(ft):
-                        raise SemanticError(
-                            f"Variant '{vd.name}' cannot carry an array; arrays live "
-                            f"in a frame, not in a heap object",
-                            vd.line, vd.col,
-                        )
-                    if ft == Void:
-                        raise SemanticError(
-                            f"Variant '{vd.name}' cannot carry a void value",
-                            vd.line, vd.col,
-                        )
-                    # Payloads are positional, so the fields are named by
-                    # position. Nothing in the language can write these names.
-                    fields.append(StructField(f"_{position}", ft, offset))
-                    offset += word_count(ft)
-                variant.fields = fields
+                self.ctx.variants[f"{ed.name}::{vd.name}"].fields = \
+                    self._variant_fields(vd, ed.name)
+
+    def _variant_fields(self, vd: A.VariantDef, owner: str) -> List[StructField]:
+        """Resolve one variant's payload. Shared with instantiation."""
+        fields: List[StructField] = []
+        offset = 0
+        for position, type_name in enumerate(vd.payload):
+            ft = self._resolve_type(type_name, vd.line, vd.col)
+            if is_array_type(ft):
+                raise SemanticError(
+                    f"Variant '{vd.name}' cannot carry an array; arrays live "
+                    f"in a frame, not in a heap object",
+                    vd.line, vd.col, self._chain,
+                )
+            if ft == Void:
+                raise SemanticError(
+                    f"Variant '{vd.name}' cannot carry a void value",
+                    vd.line, vd.col, self._chain,
+                )
+            # Payloads are positional, so the fields are named by
+            # position. Nothing in the language can write these names.
+            fields.append(StructField(f"_{position}", ft, offset))
+            offset += word_count(ft)
+        return fields
 
     def analyze(self, program: A.Program) -> Context:
         # Structs first: function signatures may mention struct types.
@@ -344,6 +573,17 @@ class SemanticAnalyzer:
 
         # First pass: collect user-defined function signatures
         for fn in program.functions:
+            if fn.type_params:
+                # A template has no signature yet: its parameter types mention
+                # names that are not types until something binds them.
+                if fn.name in self.ctx.generic_functions or fn.name in self.ctx.functions:
+                    raise SemanticError(f"Redefinition of function '{fn.name}'",
+                                        fn.line, fn.col)
+                self.ctx.generic_functions[fn.name] = fn
+                continue
+            if fn.name in self.ctx.generic_functions:
+                raise SemanticError(f"Redefinition of function '{fn.name}'",
+                                    fn.line, fn.col)
             param_types: List[Type] = []
             for p in fn.params:
                 pt = self._resolve_type(p.type_name, p.line, p.col)
@@ -363,12 +603,24 @@ class SemanticAnalyzer:
 
         self._check_entry_point(program)
 
-        # Second pass: analyze function bodies
+        # Second pass: analyze function bodies, then whatever they asked to
+        # exist. A template is not analyzed here -- only its instantiations are,
+        # and only the ones something reached.
         for fn in program.functions:
+            if fn.type_params:
+                continue
             self._analyze_function(fn)
+            self.ctx.functions_to_emit.append(fn)
+        self._drain_instantiations()
         return self.ctx
 
     def _check_entry_point(self, program: A.Program):
+        if 'main' in self.ctx.generic_functions:
+            node = self.ctx.generic_functions['main']
+            raise SemanticError(
+                "Entry point 'main' must not be generic: nothing calls it, so "
+                "nothing could say what its type parameters are",
+                node.line, node.col)
         sig = self.ctx.functions.get('main')
         if sig is None:
             raise SemanticError("Missing entry point 'main'")
@@ -388,6 +640,7 @@ class SemanticAnalyzer:
         self._frame = []
         self._loop_depth = 0
         self._current_function = fn.name
+        self._current_file = fn.source_file
         for p, t in zip(fn.params, sig.params):
             sym = scope.define(Symbol(p.name, t), p.line, p.col)
             self.ctx.bind(p, sym)
@@ -601,7 +854,8 @@ class SemanticAnalyzer:
             if arm.variant is None:
                 catch_all = arm
             else:
-                variant = info.variant_named(arm.variant)
+                variant = (info.variant_named(arm.variant)
+                           or self._variant_by_short_name(info, arm.variant))
                 if variant is None:
                     if arm.variant in self.ctx.variants:
                         raise SemanticError(
@@ -613,7 +867,7 @@ class SemanticAnalyzer:
                         f"Enum '{info.name}' has no variant '{arm.variant}'",
                         arm.line, arm.col,
                     )
-                if arm.variant in covered:
+                if variant.short_name in covered:
                     raise SemanticError(
                         f"Variant '{arm.variant}' is matched twice", arm.line, arm.col
                     )
@@ -625,7 +879,10 @@ class SemanticAnalyzer:
                         f"binds {len(arm.bindings)} name(s)",
                         arm.line, arm.col,
                     )
-                covered[arm.variant] = True
+                # Keyed by the short name, which is what a written arm and an
+                # instantiated variant have in common: an arm of a match on
+                # Option<int> writes `Option::Some`, not `Option<int>::Some`.
+                covered[variant.short_name] = True
                 self.ctx.arm_variant[id(arm)] = variant
 
             # An arm is a scope, like an if block. Its bindings are ordinary
@@ -646,7 +903,7 @@ class SemanticAnalyzer:
 
         # Short names: the message already says which enum, so qualifying each
         # one would only repeat it.
-        missing = [v.short_name for v in info.variants if v.name not in covered]
+        missing = [v.short_name for v in info.variants if v.short_name not in covered]
         if catch_all is None and missing:
             raise SemanticError(
                 f"match on '{info.name}' does not cover: {', '.join(missing)}",
@@ -661,6 +918,143 @@ class SemanticAnalyzer:
                 catch_all.line, catch_all.col,
             ))
 
+    def _analyze_generic_call(self, e: A.Call, scope: Scope,
+                              expected: Optional[Type]) -> Type:
+        """Type a call to a generic function, instantiating what it names.
+
+        Type arguments are found in the order a reader would: written out if
+        they were, otherwise from the argument types, and failing that from the
+        type the call's result has to be. What is left unbound after all three
+        is a call nothing can decide, and says so.
+        """
+        template = self.ctx.generic_functions[e.callee]
+        params = template.type_params
+        if len(e.args) != len(template.params):
+            raise SemanticError(
+                f"Function '{e.callee}' expects {len(template.params)} args, "
+                f"got {len(e.args)}", e.line, e.col, self._chain)
+        arg_types = [self._analyze_expr(a, scope) for a in e.args]
+
+        subs: Dict[str, str] = {}
+        if e.type_args:
+            self._template_arity(template, e.callee, e.type_args, e.line, e.col)
+            for name, written in zip(params, e.type_args):
+                # Resolved rather than taken as written, so that a spelling and
+                # its canonical form name one instantiation.
+                subs[name] = self._resolve_type(written, e.line, e.col).name
+        else:
+            binders = set(params)
+            for p, at in zip(template.params, arg_types):
+                unify_type_name(p.type_name, at.name, binders, subs)
+            if expected is not None and any(p not in subs for p in params):
+                unify_type_name(template.return_type or "void", expected.name,
+                                binders, subs)
+        missing = [p for p in params if p not in subs]
+        if missing:
+            raise SemanticError(
+                f"Cannot tell what {self._names(missing)} in this call to "
+                f"'{e.callee}'; write the type arguments out, as in "
+                f"'{e.callee}::<{', '.join(params)}>(...)'",
+                e.line, e.col, self._chain)
+
+        mangled = f"{e.callee}<{','.join(subs[p] for p in params)}>"
+        sig = self._instantiate_function(template, subs, mangled, e)
+        for arg, at, pt in zip(e.args, arg_types, sig.params):
+            if not assignable(pt, at):
+                raise SemanticError(
+                    f"Argument type mismatch in '{mangled}': expected {pt}, got {at}",
+                    arg.line, arg.col, self._chain)
+        # Codegen calls what this resolved to, not what was written.
+        self.ctx.call_target[id(e)] = mangled
+        self.ctx.set_type(e, sig.ret)
+        return sig.ret
+
+    @staticmethod
+    def _names(missing: List[str]) -> str:
+        joined = "', '".join(missing)
+        return f"'{joined}' is" if len(missing) == 1 else f"'{joined}' are"
+
+    def _struct_lit_name(self, e: A.StructLit, expected: Optional[Type]) -> str:
+        """Which struct a literal builds.
+
+        `Vec::<int> { ... }` says so outright. A bare `Vec { ... }` takes its
+        type arguments from the type the literal has to have -- the same rule
+        array_new follows, and the one that lets a template's own body say
+        `Vec { ... }` and mean `Vec<T>`.
+        """
+        if e.struct_name not in self.ctx.generic_structs:
+            return e.struct_name
+        app = generic_application(expected.name) if expected is not None else None
+        if app is not None and app[0] == e.struct_name:
+            return expected.name
+        params = self.ctx.generic_structs[e.struct_name].type_params
+        raise SemanticError(
+            f"Cannot tell what {self._names(params)} in this "
+            f"'{e.struct_name}' literal; write them out, as in "
+            f"'{e.struct_name}::<{', '.join(params)}> {{ ... }}'",
+            e.line, e.col, self._chain)
+
+    def _variant_template(self, name: str):
+        """`(EnumDef, VariantDef)` for a name like `Option::Some` whose enum is
+        a template, else None. A variant is written with the enum's declared
+        name whatever it was instantiated at, so this is how one is recognised
+        before any instantiation exists."""
+        if "::" not in name:
+            return None
+        base, short = name.split("::", 1)
+        ed = self.ctx.generic_enums.get(base)
+        if ed is None:
+            return None
+        vd = next((v for v in ed.variants if v.name == short), None)
+        return None if vd is None else (ed, vd)
+
+    def _analyze_generic_variant(self, e: A.Expr, template, args: List[A.Expr],
+                                 scope: Scope, expected: Optional[Type]) -> Type:
+        """Type `Option::Some(5)` or a bare `Option::None`.
+
+        The payload says what it can -- `Some(5)` fixes T at int -- and the
+        expected type says the rest, which is the only thing that can speak for
+        a variant carrying nothing.
+        """
+        ed, vd = template
+        arg_types = [self._analyze_expr(a, scope) for a in args]
+        subs: Dict[str, str] = {}
+        binders = set(ed.type_params)
+        if len(args) == len(vd.payload):
+            for pattern, at in zip(vd.payload, arg_types):
+                unify_type_name(pattern, at.name, binders, subs)
+        if expected is not None:
+            app = generic_application(expected.name)
+            if app is not None and app[0] == ed.name and len(app[1]) == len(ed.type_params):
+                for name, written in zip(ed.type_params, app[1]):
+                    subs.setdefault(name, written)
+        missing = [p for p in ed.type_params if p not in subs]
+        if missing:
+            raise SemanticError(
+                f"Cannot tell what {self._names(missing)} in '{ed.name}::{vd.name}'; "
+                f"annotate what it initialises, as in "
+                f"'let x: {ed.name}<{', '.join(ed.type_params)}> = ...'",
+                e.line, e.col, self._chain)
+        mangled = f"{ed.name}<{','.join(subs[p] for p in ed.type_params)}>"
+        self._ensure_instantiated(mangled, e.line, e.col)
+        return self._analyze_variant_construction(
+            e, f"{mangled}::{vd.name}", args, scope, arg_types)
+
+    def _variant_by_short_name(self, info: EnumInfo, written: str):
+        """`Option::Some` against the enum `Option<int>`.
+
+        An arm names the enum the way it was declared. Which instantiation is
+        meant comes from the subject's type, so there is nothing for the
+        programmer to repeat and no way for the two to disagree.
+        """
+        if "::" not in written:
+            return None
+        base, short = written.split("::", 1)
+        app = generic_application(info.name)
+        if app is None or app[0] != base:
+            return None
+        return next((v for v in info.variants if v.short_name == short), None)
+
     def _reject_variant_name(self, e: A.Expr, name: str):
         """Explain a name that looks like it was meant to be a variant.
 
@@ -671,7 +1065,7 @@ class SemanticAnalyzer:
         """
         if "::" in name:
             enum_name = name.split("::", 1)[0]
-            if enum_name not in self.ctx.enums:
+            if enum_name not in self.ctx.enums and enum_name not in self.ctx.generic_enums:
                 raise SemanticError(f"No enum named '{enum_name}'", e.line, e.col)
             raise SemanticError(
                 f"Enum '{enum_name}' has no variant '{name.split('::', 1)[1]}'",
@@ -711,7 +1105,7 @@ class SemanticAnalyzer:
         return ft.ret
 
     def _analyze_variant_construction(self, e: A.Expr, name: str, args: List[A.Expr],
-                                      scope: Scope) -> Type:
+                                      scope: Scope, arg_types=None) -> Type:
         """Type `Ok(5)` or a bare `Pending`.
 
         The result is the *enum's* type, not the variant's. A variant is not a
@@ -734,8 +1128,11 @@ class SemanticAnalyzer:
             raise SemanticError(
                 f"Variant '{name}' carries {carries}, got {len(args)}", e.line, e.col
             )
-        for position, (arg, fld) in enumerate(zip(args, variant.fields)):
-            at = self._analyze_expr(arg, scope)
+        # Already typed when the caller had to infer from them; typing an
+        # expression twice is not harmless, since a node carries one type.
+        if arg_types is None:
+            arg_types = [self._analyze_expr(arg, scope) for arg in args]
+        for position, (arg, fld, at) in enumerate(zip(args, variant.fields, arg_types)):
             if not assignable(fld.type, at):
                 raise SemanticError(
                     f"Variant '{name}' expects {fld.type} at position {position}, "
@@ -901,6 +1298,15 @@ class SemanticAnalyzer:
                             e.line, e.col,
                         )
                     return self._analyze_variant_construction(e, e.name, [], scope)
+                template = self._variant_template(e.name)
+                if template is not None:
+                    if template[1].payload:
+                        raise SemanticError(
+                            f"Variant '{e.name}' carries a payload; "
+                            f"write '{e.name}(...)'",
+                            e.line, e.col, self._chain,
+                        )
+                    return self._analyze_generic_variant(e, template, [], scope, expected)
                 sig = self.ctx.functions.get(e.name)
                 if sig is not None:
                     if sig.is_builtin:
@@ -1118,9 +1524,11 @@ class SemanticAnalyzer:
             self.ctx.set_type(e, fld.type)
             return fld.type
         if isinstance(e, A.StructLit):
-            info = self.ctx.structs.get(e.struct_name)
+            name = self._struct_lit_name(e, expected)
+            self._ensure_instantiated(name, e.line, e.col)
+            info = self.ctx.structs.get(name)
             if info is None:
-                raise SemanticError(f"Unknown struct '{e.struct_name}'", e.line, e.col)
+                raise SemanticError(f"Unknown struct '{name}'", e.line, e.col, self._chain)
             seen: Dict[str, bool] = {}
             for fi in e.fields:
                 if fi.name in seen:
@@ -1211,6 +1619,14 @@ class SemanticAnalyzer:
             local = scope.resolve(e.callee)
             if local is not None:
                 return self._analyze_indirect_call(e, local, scope)
+            if e.callee in self.ctx.generic_functions:
+                return self._analyze_generic_call(e, scope, expected)
+            template = self._variant_template(e.callee)
+            if template is not None:
+                return self._analyze_generic_variant(e, template, e.args, scope, expected)
+            if e.type_args:
+                raise SemanticError(
+                    f"'{e.callee}' takes no type arguments", e.line, e.col, self._chain)
             if e.callee in self.ctx.variants:
                 return self._analyze_variant_construction(e, e.callee, e.args, scope)
             if e.callee not in self.ctx.functions:

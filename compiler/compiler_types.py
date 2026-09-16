@@ -283,13 +283,14 @@ def array_length_from_name(name: Optional[str]) -> Optional[int]:
 
 
 def split_top_level(text: str) -> List[str]:
-    """Split on commas that are not inside a nested parameter list, so that
-    `int,fn(int,int):int` is two parameters rather than three."""
+    """Split on commas that are not inside a nested type, so that
+    `int,fn(int,int):int` is two parameters rather than three, and
+    `Map<K,V>,int` is two rather than three."""
     parts, depth, start = [], 0, 0
     for i, c in enumerate(text):
-        if c == "(":
+        if c in "(<":
             depth += 1
-        elif c == ")":
+        elif c in ")>":
             depth -= 1
         elif c == "," and depth == 0:
             parts.append(text[start:i])
@@ -335,20 +336,100 @@ def func_signature_from_name(name: Optional[str]):
     return params, ret_name
 
 
-def element_type_from_name(name: Optional[str]) -> Optional[str]:
-    """T for a type name of the form `Array<T>`, None if it isn't one.
+def generic_application(name: Optional[str]):
+    """`(base name, [argument names])` for a type of the form `Name<A, B>`,
+    None if it isn't one.
 
-    There is exactly one type argument, so it is the whole of what the angle
-    brackets enclose and no depth counting is needed: `Array<Array<int>>` and
-    `Array<fn(int):int>` both fall out of taking the middle.
+    This is the one shape a generic declaration and a use of it share, so it is
+    also what a mangled name looks like: `Vec<int>` names the instantiation of
+    `Vec<T>` and is an ordinary struct name everywhere downstream. `Array<T>`
+    is one of these too, and is special only in what it means.
+
+    Raises UnknownTypeError on a malformed one.
     """
-    if (not isinstance(name, str) or not name.startswith(ARRAY_OBJ_PREFIX)
-            or not name.endswith(">")):
+    if not isinstance(name, str) or not name.endswith(">"):
         return None
-    inner = name[len(ARRAY_OBJ_PREFIX):-1].strip()
-    if not inner:
-        raise UnknownTypeError(f"Missing element type in '{name}'")
-    return inner
+    open_at = name.find("<")
+    if open_at <= 0 or not name[:open_at].isidentifier():
+        # `fn(int):Vec<int>` ends in '>' without being an application of one.
+        return None
+    args = split_top_level(name[open_at + 1:-1])
+    if any(not a for a in args):
+        raise UnknownTypeError(f"Empty type argument in '{name}'")
+    return name[:open_at], args
+
+
+def element_type_from_name(name: Optional[str]) -> Optional[str]:
+    """T for a type name of the form `Array<T>`, None if it isn't one."""
+    app = generic_application(name)
+    if app is None or app[0] != "Array":
+        return None
+    base, args = app
+    if len(args) != 1:
+        raise UnknownTypeError(
+            f"'Array' takes one element type, got {len(args)} in '{name}'")
+    return args[0]
+
+
+def substitute_type_name(name: str, subs: Dict[str, str]) -> str:
+    """Rewrite a type spelling, replacing the type parameters it mentions.
+
+    Structural rather than textual, so `T` becomes `int` inside `Vec<T>`,
+    `Array<T>` and `fn(T):U` alike, while a name that merely contains a
+    parameter's letters -- `Total` when `T` is bound -- is left alone. This is
+    the whole of what instantiating a declaration does to its types.
+    """
+    if not isinstance(name, str):
+        return name
+    if name in subs:
+        return subs[name]
+    app = generic_application(name)
+    if app is not None:
+        base, args = app
+        inner = ",".join(substitute_type_name(a, subs) for a in args)
+        return f"{base}<{inner}>"
+    signature = func_signature_from_name(name)
+    if signature is not None:
+        params, ret = signature
+        inner = ",".join(substitute_type_name(p, subs) for p in params)
+        return f"fn({inner}):{substitute_type_name(ret, subs)}"
+    # Anything else -- a builtin, a struct, an int[N] whose element is always
+    # int -- mentions no parameter and is its own substitution.
+    return name
+
+
+def unify_type_name(pattern: str, actual: str, params, subs: Dict[str, str]) -> bool:
+    """Match a declared spelling against a concrete one, binding parameters.
+
+    `Vec<T>` against `Vec<int>` binds T to int; `fn(T):U` against
+    `fn(int):str` binds both. A parameter already bound must match what it was
+    bound to, which is what makes `fn pair<T>(a: T, b: T)` reject `pair(1, "x")`
+    at the call rather than inside the instantiated body.
+    """
+    if pattern in params:
+        bound = subs.get(pattern)
+        if bound is None:
+            subs[pattern] = actual
+            return True
+        return bound == actual
+    pattern_app, actual_app = generic_application(pattern), generic_application(actual)
+    if pattern_app is not None or actual_app is not None:
+        if pattern_app is None or actual_app is None:
+            return False
+        if pattern_app[0] != actual_app[0] or len(pattern_app[1]) != len(actual_app[1]):
+            return False
+        return all(unify_type_name(p, a, params, subs)
+                   for p, a in zip(pattern_app[1], actual_app[1]))
+    pattern_sig, actual_sig = func_signature_from_name(pattern), func_signature_from_name(actual)
+    if pattern_sig is not None or actual_sig is not None:
+        if pattern_sig is None or actual_sig is None:
+            return False
+        if len(pattern_sig[0]) != len(actual_sig[0]):
+            return False
+        return (all(unify_type_name(p, a, params, subs)
+                    for p, a in zip(pattern_sig[0], actual_sig[0]))
+                and unify_type_name(pattern_sig[1], actual_sig[1], params, subs))
+    return pattern == actual
 
 
 def type_from_name(name: str, structs: Optional[Dict[str, "StructInfo"]] = None,

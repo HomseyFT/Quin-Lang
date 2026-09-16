@@ -32,6 +32,7 @@ class Parser:
     def _struct_def(self) -> A.StructDef:
         self._consume(TokenType.STRUCT, "Expected 'struct'")
         name_tok = self._consume(TokenType.IDENTIFIER, "Expected struct name")
+        type_params = self._type_parameters()
         self._consume(TokenType.LEFT_BRACE, "Expected '{' after struct name")
         fields: List[A.FieldDef] = []
         while not self._check(TokenType.RIGHT_BRACE):
@@ -42,7 +43,8 @@ class Parser:
             if not self._match(TokenType.COMMA):
                 break
         self._consume(TokenType.RIGHT_BRACE, "Expected '}' after struct fields")
-        return A.StructDef(name_tok.lexeme, fields, line=name_tok.line, col=name_tok.col)
+        return A.StructDef(name_tok.lexeme, fields, type_params,
+                           line=name_tok.line, col=name_tok.col)
 
     def _enum_def(self) -> A.EnumDef:
         """`enum Name { Variant, Variant(type, type), }`
@@ -53,6 +55,7 @@ class Parser:
         """
         self._consume(TokenType.ENUM, "Expected 'enum'")
         name_tok = self._consume(TokenType.IDENTIFIER, "Expected enum name")
+        type_params = self._type_parameters()
         self._consume(TokenType.LEFT_BRACE, "Expected '{' after enum name")
         variants: List[A.VariantDef] = []
         while not self._check(TokenType.RIGHT_BRACE):
@@ -79,7 +82,8 @@ class Parser:
             if not self._match(TokenType.COMMA):
                 break
         self._consume(TokenType.RIGHT_BRACE, "Expected '}' after enum variants")
-        return A.EnumDef(name_tok.lexeme, variants, line=name_tok.line, col=name_tok.col)
+        return A.EnumDef(name_tok.lexeme, variants, type_params,
+                         line=name_tok.line, col=name_tok.col)
 
     def _include(self) -> A.Include:
         path_tok = self._consume(TokenType.STRING, "Expected path string after 'include'")
@@ -105,6 +109,13 @@ class Parser:
             return False
         return self._peek().type == type_
 
+    def _check_next(self, type_: TokenType) -> bool:
+        """The token after the current one. Only the turbofish needs this: `::`
+        means a qualified name or a type argument list, and which one is not
+        decided until the token after it."""
+        nxt = self.current + 1
+        return nxt < len(self.tokens) and self.tokens[nxt].type == type_
+
     def _advance(self) -> Token:
         if not self._is_at_end():
             self.current += 1
@@ -123,6 +134,7 @@ class Parser:
     def _function(self) -> A.Function:
         self._consume(TokenType.FN, "Expected 'fn' at function start")
         name_tok = self._consume(TokenType.IDENTIFIER, "Expected function name")
+        type_params = self._type_parameters()
         self._consume(TokenType.LEFT_PAREN, "Expected '(' after function name")
         params: List[A.Param] = []
         if not self._check(TokenType.RIGHT_PAREN):
@@ -138,7 +150,8 @@ class Parser:
         if self._match(TokenType.COLON):
             ret_type = self._type_name()
         body = self._block()
-        return A.Function(name_tok.lexeme, params, ret_type, body, line=name_tok.line, col=name_tok.col)
+        return A.Function(name_tok.lexeme, params, ret_type, body, type_params,
+                          line=name_tok.line, col=name_tok.col)
 
     def _function_type_name(self) -> str:
         """`fn(T, ...)` with an optional `: R`, already consumed the `fn`.
@@ -157,6 +170,27 @@ class Parser:
                       "Expected ')' after function type parameters")
         ret = self._type_name() if self._match(TokenType.COLON) else "void"
         return f"fn({','.join(params)}):{ret}"
+
+    def _type_parameters(self) -> List[str]:
+        """`<T, U>` after a declaration's name, or nothing.
+
+        Bare identifiers. There are no bounds, which is what makes a template's
+        body uncheckable until it is instantiated -- the trade recorded in the
+        error model rather than in the grammar.
+        """
+        if not self._match(TokenType.LESS):
+            return []
+        names: List[str] = []
+        while True:
+            tok = self._consume(TokenType.IDENTIFIER, "Expected a type parameter name")
+            if tok.lexeme in names:
+                raise ParseError(f"Duplicate type parameter '{tok.lexeme}'",
+                                 tok.line, tok.col)
+            names.append(tok.lexeme)
+            if not self._match(TokenType.COMMA):
+                break
+        self._close_type_arguments()
+        return names
 
     def _type_arguments(self, base: str) -> str:
         """`<T, ...>` after a type name, already consumed the `<`.
@@ -528,19 +562,46 @@ class Parser:
             return A.Unary(op, right, line=tok.line, col=tok.col)
         return self._call()
 
+    def _call_arguments(self) -> List[A.Expr]:
+        """The arguments of a call, having consumed the '('."""
+        args: List[A.Expr] = []
+        if not self._check(TokenType.RIGHT_PAREN):
+            while True:
+                args.append(self._expression())
+                if not self._match(TokenType.COMMA):
+                    break
+        self._consume(TokenType.RIGHT_PAREN, "Expected ')' after arguments")
+        return args
+
     def _call(self) -> A.Expr:
         expr = self._primary()
         while True:
+            if isinstance(expr, A.Identifier) and self._check(TokenType.COLON_COLON):
+                # `f::<int>(x)` and `Vec::<int> { ... }`. In a type position the
+                # angle brackets need no `::`, but in an expression they do:
+                # `f<int>(x)` reads as two comparisons, and no amount of
+                # lookahead makes that a happy grammar.
+                self._advance()
+                self._consume(TokenType.LESS, "Expected '<' after '::'")
+                turbofish = [self._type_name()]
+                while self._match(TokenType.COMMA):
+                    turbofish.append(self._type_name())
+                self._close_type_arguments()
+                if self._check(TokenType.LEFT_BRACE):
+                    # A type's own arguments belong in its name, so nothing
+                    # downstream sees a struct literal as a special case.
+                    spelling = f"{expr.name}<{','.join(turbofish)}>"
+                    expr = self._struct_literal(spelling, expr.line, expr.col)
+                    continue
+                paren_tok = self._consume(TokenType.LEFT_PAREN,
+                                          "Expected '(' or '{' after type arguments")
+                expr = A.Call(expr.name, self._call_arguments(), turbofish,
+                              line=paren_tok.line, col=paren_tok.col)
+                continue
             if isinstance(expr, A.Identifier) and self._match(TokenType.LEFT_PAREN):
                 paren_tok = self._previous()
-                args: List[A.Expr] = []
-                if not self._check(TokenType.RIGHT_PAREN):
-                    while True:
-                        args.append(self._expression())
-                        if not self._match(TokenType.COMMA):
-                            break
-                self._consume(TokenType.RIGHT_PAREN, "Expected ')' after arguments")
-                expr = A.Call(expr.name, args, line=paren_tok.line, col=paren_tok.col)
+                expr = A.Call(expr.name, self._call_arguments(),
+                              line=paren_tok.line, col=paren_tok.col)
                 continue
             # Any expression may be the base, so `arr[i][j]` chains.
             if self._match(TokenType.LEFT_BRACKET):
@@ -556,7 +617,7 @@ class Parser:
             break
         return expr
 
-    def _struct_literal(self, name_tok: Token) -> A.StructLit:
+    def _struct_literal(self, name: str, line: int, col: int) -> A.StructLit:
         self._consume(TokenType.LEFT_BRACE, "Expected '{' to start struct literal")
         inits: List[A.FieldInit] = []
         while not self._check(TokenType.RIGHT_BRACE):
@@ -567,7 +628,7 @@ class Parser:
             if not self._match(TokenType.COMMA):
                 break
         self._consume(TokenType.RIGHT_BRACE, "Expected '}' after struct literal fields")
-        return A.StructLit(name_tok.lexeme, inits, line=name_tok.line, col=name_tok.col)
+        return A.StructLit(name, inits, line=line, col=col)
 
     def _vm_asm_block(self, kw_tok: Token) -> A.Stmt:
         self._consume(TokenType.LEFT_BRACE, "Expected '{' after 'vm_asm'")
@@ -618,7 +679,9 @@ class Parser:
             return A.Literal(tok.literal, line=tok.line, col=tok.col)
         if self._match(TokenType.IDENTIFIER):
             tok = self._previous()
-            if self._check(TokenType.COLON_COLON):
+            # `f::<int>(x)` is a turbofish, not a qualified name, so it is left
+            # for _call to read along with the arguments it belongs to.
+            if self._check(TokenType.COLON_COLON) and not self._check_next(TokenType.LESS):
                 # `Enum::Variant` is one name, so a call on it lands in _call
                 # as an ordinary Call and sema resolves it like any other.
                 return A.Identifier(self._qualified(tok), line=tok.line, col=tok.col)
@@ -626,7 +689,7 @@ class Parser:
             # every condition in the language is parenthesized, so an
             # identifier is never directly followed by a block.
             if self._check(TokenType.LEFT_BRACE):
-                return self._struct_literal(tok)
+                return self._struct_literal(tok.lexeme, tok.line, tok.col)
             return A.Identifier(tok.lexeme, line=tok.line, col=tok.col)
         if self._match(TokenType.LEFT_PAREN):
             expr = self._expression()

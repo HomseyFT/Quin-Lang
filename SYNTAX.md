@@ -153,6 +153,53 @@ let grid: Array<Array<int>> = array_new(2);   // arrays nest
 - `@a[i]` is refused: an element has no frame address.
 - Whether the collector traces the elements is decided by the array's heap kind, set when it is allocated from the element type. An `Array<str>` is traced; an `Array<int>` never is.
 
+## Generics
+
+A `fn`, `struct` or `enum` may bind type parameters after its name. Parameters are bare identifiers; there are no bounds.
+
+```quin
+struct Vec<T> { data: Array<T>, len: int }
+enum Result<T, E> { Ok(T), Err(E) }
+fn map<T, U>(v: Vec<T>, f: fn(T): U): Vec<U> { ... }
+```
+
+A declaration with type parameters is a template. Each use with concrete arguments compiles a copy under a mangled name — `Vec<int>`, `map<int,str>` — and only instantiations something reached are compiled.
+
+### Type arguments
+
+In a **type** position, write them plainly: `Vec<int>`, `Array<Vec<str>>`.
+
+In an **expression**, write `::<>`, because `f<int>(x)` would read as two comparisons:
+
+```quin
+let e = vec_new::<str>(4);          // a call
+let v = Vec::<int> { len: 0 };      // a struct literal
+```
+
+Both are needed only when nothing else says. Arguments are found in this order:
+
+1. By unifying the declared parameter types against the actual argument types.
+2. From the type the expression has to produce — an annotated declaration, an assignment to a typed target, a struct-literal field, or a `return`.
+3. From an explicit `::<>`, which overrides both.
+
+What is still unbound after all three is a semantic error naming the parameter.
+
+A variant of a generic enum is written with the enum's declared name: `Result::Ok(3)`, not `Result<int,str>::Ok(3)`. A match arm does the same, and which instantiation is meant comes from the subject's type.
+
+`main` may not be generic: nothing calls it, so nothing could say what its parameters are.
+
+### Errors inside a template
+
+Without bounds, a template's body is checked once per instantiation. An error reports the instantiation chain that reached it:
+
+```
+Semantic error: [3:47] Relational operators do not apply to struct references or null
+  in biggest<Point>
+  instantiated at examples/sort.ql:7:25
+```
+
+Instantiation depth is capped at 32.
+
 ## Statements
 
 ### Variable declaration
