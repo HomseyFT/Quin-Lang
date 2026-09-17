@@ -595,12 +595,23 @@ class Parser:
                     continue
                 paren_tok = self._consume(TokenType.LEFT_PAREN,
                                           "Expected '(' or '{' after type arguments")
-                expr = A.Call(expr.name, self._call_arguments(), turbofish,
+                expr = A.Call(expr.name, self._call_arguments(),
+                              type_args=turbofish,
                               line=paren_tok.line, col=paren_tok.col)
                 continue
             if isinstance(expr, A.Identifier) and self._match(TokenType.LEFT_PAREN):
                 paren_tok = self._previous()
                 expr = A.Call(expr.name, self._call_arguments(),
+                              line=paren_tok.line, col=paren_tok.col)
+                continue
+            # `m.hash(key)`. The field access itself becomes the callee, so
+            # sema types it and codegen emits it exactly as it already does
+            # for a field read -- which leaves the function index on the stack,
+            # which is what CALL_INDIRECT wants. Only a field: an index or
+            # another call followed by '(' stays the error it is today.
+            if isinstance(expr, A.FieldAccess) and self._match(TokenType.LEFT_PAREN):
+                paren_tok = self._previous()
+                expr = A.Call(expr.field, self._call_arguments(), receiver=expr,
                               line=paren_tok.line, col=paren_tok.col)
                 continue
             # Any expression may be the base, so `arr[i][j]` chains.

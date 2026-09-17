@@ -117,6 +117,9 @@ fn main(): int {
 | `std/bits.ql` | `bit_get` / `bit_set` / `bit_clear` / `bit_toggle`, `popcount`, `reverse_bits`, `leading_zeros`, `trailing_zeros`, `highest_bit`, `rotate_left` / `rotate_right`, `logical_shift_right` |
 | `std/string.ql` | Searching, slicing, case conversion, trimming, parsing, character predicates, `str_split` / `str_join` / `str_lines` / `str_replace`, and `show_str` / `show_bool` for handing a renderer to `vec_show` and friends — for int, char and float the builtin itself is the renderer |
 | `std/parse.ql` | `parse_int`, `parse_uint`, `parse_bool` returning `Option`, and `parse_int_or` |
+| `std/hash.ql` | `hash_str`, `hash_int`, `hash_bool` — the hash a collection is handed at construction |
+| `std/map.ql` | `Map<K, V>`, open addressing: `map_new`, `map_set`, `map_get` returning `Option`, `map_get_or`, `map_has`, `map_remove`, `map_keys`, `map_foreach`, growing itself |
+| `std/set.ql` | `Set<T>`: `set_add`, `set_has`, `set_remove`, `set_items`, and `set_union` / `set_intersection` / `set_difference` / `set_is_subset` |
 | `std/io.ql` | `newline`, `print_repeat`, `print_spaces`, `print_line`, `hex_digit`, `print_hex` / `println_hex`, `print_binary` / `println_binary`, `print_padded` |
 | `std/vec.ql` | `Vec<T>`, a growable array over an `Array<T>`: `vec_new`, `vec_of`, `vec_push`, `vec_get`, `vec_try_get`, `vec_set`, `vec_pop`, `vec_reverse`, `vec_map`, `vec_filter`, `vec_fold`, `vec_any` / `vec_all`, `vec_show`, and `vec_sum` / `vec_max` / `vec_min` over `Vec<int>` |
 | `std/list.ql` | `List<T>`, a persistent singly linked list: `list_push`, `list_of`, `list_len`, `list_get`, `list_try_get`, `list_reverse`, `list_contains`, the same higher-order set, and `list_sum` / `list_max` / `list_min` over `List<int>` |
@@ -447,6 +450,35 @@ Semantic error: [3:47] Relational operators do not apply to struct references or
 ```
 
 The trade is deliberate. Bounds would move that error to the call site, but they need a trait system to name what a bound *is*, which is a second large feature. Instantiation depth is capped so that a template instantiating itself at a larger type each time fails with the chain rather than exhausting memory.
+
+### Hash maps
+
+```quin
+include "std/map.ql";
+
+let counts: Map<str, int> = map_new(16, hash_str);
+map_set(counts, word, map_get_or(counts, word, 0) + 1);
+
+match (map_get(counts, "fox")) {
+    Option::Some(n) => { println(n); }
+    Option::None    => { println("not seen"); }
+}
+```
+
+**The map carries its own hash.** A type parameter has no bounds, so nothing about `K` tells a `Map<K, V>` how to hash one — it is supplied at construction and stored as a `fn(K): int` field. Equality needs nothing supplied: `==` already works on any type parameter, meaning content for a `str` and identity for a struct reference. This is the clearest thing generics and first-class function values buy together, and it is why `m.hash(key)` had to become callable.
+
+Storage is three parallel arrays — keys, values, and a state array marking each slot empty, occupied, or a tombstone — with **open addressing and linear probing**. Nothing is allocated per entry, which matters on a 64 KiB heap, and the collector needs nothing new: the key and value arrays are traced or not by what `Array<K>` and `Array<V>` are, and the state array never is.
+
+Capacity is always a **power of two**, so a slot is found by masking rather than by a remainder. That is not only speed: `%` keeps the sign of its left operand, so a negative hash would index backwards — which is why every function in `std/hash.ql` masks off the sign bit last.
+
+Two consequences worth knowing:
+
+- **Removal leaves a tombstone.** A probe walks through one, or every key that once collided with a removed one becomes unfindable. Tombstones count toward the load factor, since a probe pays for them like entries; growth drops them. The removed key and value stay in their arrays until the slot is reused or the map grows — nothing can clear them, because `null` is not assignable to a type parameter that might be `int`. It is the same bounded retention `vec_clear` has.
+- **Order is slot order**, not insertion order, and it changes when the map grows. `map_keys` and `map_foreach` promise contents, not sequence.
+
+**Hashing costs about a microsecond per character**, because `hash_str` is ordinary QuinLang walking the string. That is fine for the sizes this heap holds and worth knowing before hashing a long key in a loop. Since the hash is a function value, a faster one — a builtin, if it ever earns one — can be substituted at the call that builds the map and nowhere else.
+
+`Set<T>` is a `Map<T, bool>` wearing the right name: one implementation of the probing rather than two, at the cost of one unread word per slot.
 
 ### Structs
 
@@ -1257,7 +1289,7 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - A shadowed name shows every declaration rather than the live one. The slot table carries no scope ranges, so which is in scope at a given pc is not knowable from it; showing all of them is honest where a guess would be confidently wrong.
 - A breakpoint on a line with no code of its own moves forward to the next line that has some.
 - A builtin whose argument shapes are settled per call site — `array_push`, `array_pop`, `array_new`, `array_len` — cannot be used as a function value. Every other builtin can.
-- A function value carries no captured environment, and a call names a variable or a function rather than an arbitrary expression, so `table[i](x)` and `f()(x)` go through a local first.
+- A function value carries no captured environment. A call names a variable, a function, or a field — `m.hash(key)` works — but not an arbitrary expression, so `table[i](x)` and `f()(x)` still go through a local first.
 
 Future directions: scope ranges on the slot table, so a shadowed `print x` can name the live declaration; liveness analysis so a variable dead but still in scope stops rooting its object; and filling out `std/`.
 

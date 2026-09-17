@@ -1131,31 +1131,48 @@ class SemanticAnalyzer:
                 f"'{name}' is a variant name; write {spelled}", e.line, e.col
             )
 
-    def _analyze_indirect_call(self, e, local, scope) -> Type:
-        """`f(x)` where `f` is a variable rather than a declared function.
+    def _check_call_through(self, e, ft: Type, described: str, scope: Scope) -> Type:
+        """Check a call against a function *type* rather than a declaration.
 
-        Which function runs is not known until it runs, so this checks the call
-        against the variable's signature; the arity and argument types are as
-        static as a direct call's, only the identity is not.
+        Shared by the two ways a call can go through a value: a variable, and a
+        field. They differ only in where the type came from and what to call it
+        in a message -- the arity and argument checks are as static as a direct
+        call's, and only the identity is not.
         """
-        ft = local.type
         if not is_func_type(ft):
             raise SemanticError(
-                f"'{e.callee}' has type {ft}, not a function", e.line, e.col)
+                f"{described} has type {ft}, not a function",
+                e.line, e.col, self._chain)
         if not ft.arity_matches(len(e.args)):
             raise SemanticError(
-                f"'{e.callee}' expects {len(ft.params)} args, "
-                f"got {len(e.args)}", e.line, e.col)
+                f"{described} expects {len(ft.params)} args, "
+                f"got {len(e.args)}", e.line, e.col, self._chain)
         for a, pt in zip(e.args, ft.params):
             at = self._analyze_expr(a, scope)
             if not assignable(pt, at):
                 raise SemanticError(
                     f"Argument type mismatch: expected {pt}, got {at}",
-                    e.line, e.col)
-        self.ctx.bind(e, local)
-        self.ctx.indirect_calls.add(id(e))
+                    e.line, e.col, self._chain)
         self.ctx.set_type(e, ft.ret)
         return ft.ret
+
+    def _analyze_indirect_call(self, e, local, scope) -> Type:
+        """`f(x)` where `f` is a variable rather than a declared function."""
+        ret = self._check_call_through(e, local.type, f"'{e.callee}'", scope)
+        self.ctx.bind(e, local)
+        self.ctx.indirect_calls.add(id(e))
+        return ret
+
+    def _analyze_receiver_call(self, e, scope: Scope) -> Type:
+        """`m.hash(key)`: a call through a function held in a field.
+
+        Analyzing the receiver types the field access, which is where the
+        function type comes from -- so the field's existence, the struct's
+        identity, and the null check at run time are all somebody else's job,
+        already done.
+        """
+        ft = self._analyze_expr(e.receiver, scope)
+        return self._check_call_through(e, ft, f"Field '{e.callee}'", scope)
 
     def _analyze_variant_construction(self, e: A.Expr, name: str, args: List[A.Expr],
                                       scope: Scope, arg_types=None) -> Type:
@@ -1606,6 +1623,11 @@ class SemanticAnalyzer:
             self.ctx.set_type(e, t)
             return t
         if isinstance(e, A.Call):
+            # Before every name-based path below, because this call names none.
+            # A turbofish cannot reach here: only the identifier branch of the
+            # parser reads one, so a receiver call never carries type_args.
+            if e.receiver is not None:
+                return self._analyze_receiver_call(e, scope)
             if e.callee == "array_push":
                 if len(e.args) != 3:
                     raise SemanticError("array_push expects 3 arguments", e.line, e.col)

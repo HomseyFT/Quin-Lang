@@ -1004,6 +1004,16 @@ class CodeGenVM:
         self.code.append(Instruction(binary_ops[e.op]))
 
     def _emit_call(self, e: A.Call, layout: FunctionLayout, ctx: Context):
+        # A call through a field. The receiver lowers to a field read, which
+        # leaves the function index on top -- the same stack shape the variable
+        # case builds, so CALL_INDIRECT needs nothing new.
+        if e.receiver is not None:
+            for arg_expr in e.args:
+                self._emit_expr(arg_expr, layout, ctx)
+            self._emit_expr(e.receiver, layout, ctx)
+            self.code.append(Instruction(OpCode.CALL_INDIRECT))
+            return
+
         # Before the builtins below: a variable shadowing one of their names is
         # still a call through that variable, which is what sema decided.
         if id(e) in ctx.indirect_calls:

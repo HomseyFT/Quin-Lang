@@ -54,10 +54,10 @@ fn main(): int {
     print(" and ");
     println(times.name);
 
-    // A field is not callable directly -- a call names a variable, not an
-    // expression -- so it goes through one first.
-    let op: fn(int, int): int = times.apply;
-    println(op(6, 7));           // 42
+    // A field holding a function is callable directly. A call may name a
+    // variable, a function, or a field -- but still not an arbitrary
+    // expression, so `pick()(x)` and `table[i](x)` go through a local first.
+    println(times.apply(6, 7));  // 42
 
     println(list_show(list_map(xs, double), int_to_str));
     println(list_show(list_filter(xs, is_odd), int_to_str));

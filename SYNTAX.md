@@ -36,7 +36,7 @@ include "../lib/util.ql";
 
 The resolver parses included files recursively (depth-first) and merges their functions into a single program. A file included twice, directly or through a cycle, is only processed once. Two files defining the same function name is an error.
 
-`std/` provides `math.ql` (integer math), `bits.ql` (bit manipulation), `io.ql` (output helpers), `string.ql` (string helpers, splitting and joining), `parse.ql` (text to values, as `Option`s), `fs.ql` (files, as `Result`s), `vec.ql` (`Vec<T>`), `list.ql` (`List<T>`), `option.ql` (`Option<T>`), `result.ql` (`Result<T, E>`), `float.ql`, `input.ql`, and `prelude.ql`, which includes the function-only ones:
+`std/` provides `math.ql` (integer math), `bits.ql` (bit manipulation), `io.ql` (output helpers), `string.ql` (string helpers, splitting and joining), `parse.ql` (text to values, as `Option`s), `fs.ql` (files, as `Result`s), `hash.ql`, `map.ql` (`Map<K, V>`), `set.ql` (`Set<T>`), `vec.ql` (`Vec<T>`), `list.ql` (`List<T>`), `option.ql` (`Option<T>`), `result.ql` (`Result<T, E>`), `float.ql`, `input.ql`, and `prelude.ql`, which includes the function-only ones:
 
 ```quin
 include "std/prelude.ql";     // math, bits, io, string
@@ -46,6 +46,8 @@ include "std/option.ql";      // Option<T>
 include "std/result.ql";      // Result<T, E>
 include "std/parse.ql";       // parse_int and friends, returning Option
 include "std/fs.ql";          // files, as Results
+include "std/map.ql";         // Map<K, V>
+include "std/set.ql";         // Set<T>
 ```
 
 The modules that declare a type stay out of the prelude because a struct or enum name is global once included. See [README.md](README.md#multi-file-programs) for what each module contains.
@@ -98,7 +100,7 @@ fn main(): int {
 - Function types nest: `fn(fn(int): int): void`.
 - A function value is one word holding an index into the function table. It is not a heap reference: nothing is allocated and the collector never traces one.
 - **There is no capture.** A function value names a function and carries no environment.
-- A call names a variable or a function, not an arbitrary expression. Read a field or a returned function into a variable and call through that.
+- A call names a variable, a function, or a **field** — `m.hash(key)` calls the function held in `m.hash`. Not an arbitrary expression: `pick()(x)` and `table[i](x)` still read into a variable first.
 - A variable shadows a function of the same name, so `f()` calls a local `f` when one is in scope. Calling a variable that is not a function type is an error.
 - Builtins have no index and cannot be function values.
 - `void` and array types may not appear in a signature, for the same reasons they may not be parameters or return types.
@@ -653,7 +655,14 @@ bar(1, 2);
 len = array_push(a, len, 10);
 ```
 
-Argument count and types must match the signature exactly. Arguments are evaluated left to right. A `void` call may only be used as an expression statement.
+```quin
+m.hash(key);                 // a field holding a function
+o.inner.apply(6, 7);         // nested
+```
+
+Argument count and types must match the signature exactly. Arguments are evaluated left to right, and a receiver is evaluated once. A `void` call may only be used as an expression statement.
+
+The callee is a name or a field access, and nothing else. `pick()(x)` and `table[i](x)` do not parse; read the function into a variable and call through that. A call through a field lowers to the same `CALL_INDIRECT` a call through a variable does — the field read leaves the function's index on the stack, which is what that opcode already expects.
 
 ## Built-in functions
 

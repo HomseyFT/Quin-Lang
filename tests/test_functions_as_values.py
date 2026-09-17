@@ -281,6 +281,119 @@ class TestStdList(QuinTestCase):
             "[n1, n2, n3]")
 
 
+class TestCallingAField(QuinTestCase):
+    """`m.hash(key)`: a call whose callee is a field rather than a name.
+
+    Narrow on purpose. A call may name a variable, a function, or a field, and
+    still not an arbitrary expression -- so `table[i](x)` and `f()(x)` remain
+    what they were, and there is a test below saying so.
+    """
+
+    OP = ("struct Op { name: str, apply: fn(int, int): int }\n"
+          "fn add(a: int, b: int): int { return a + b; }\n"
+          "fn mul(a: int, b: int): int { return a * b; }\n")
+
+    def test_calling_a_function_held_in_a_field(self):
+        self.assertPrints(
+            self.OP + "fn main(): int {"
+            ' let p: Op = Op { name: "+", apply: add };'
+            " println(p.apply(6, 7)); return 0; }",
+            "13")
+
+    def test_through_a_nested_field(self):
+        self.assertPrints(
+            self.OP + "struct Outer { inner: Op }\n"
+            "fn main(): int {"
+            ' let o: Outer = Outer { inner: Op { name: "*", apply: mul } };'
+            " println(o.inner.apply(6, 7)); return 0; }",
+            "42")
+
+    def test_on_a_generic_struct(self):
+        # The case this was done for: a Map carrying its own hash function.
+        self.assertPrints(
+            "struct Holder<T> { f: fn(T): T }\n"
+            "fn twice(n: int): int { return n * 2; }\n"
+            "fn main(): int {"
+            " let h: Holder<int> = Holder { f: twice };"
+            " println(h.f(21)); return 0; }",
+            "42")
+
+    def test_the_receiver_is_evaluated_once(self):
+        self.assertPrints(
+            "struct Op { apply: fn(int): int }\n"
+            "fn inc(n: int): int { return n + 1; }\n"
+            'fn noisy(): Op { println("evaluated"); return Op { apply: inc }; }\n'
+            "fn main(): int { println(noisy().apply(1)); return 0; }",
+            "evaluated", "2")
+
+    def test_it_reuses_call_indirect(self):
+        # No new opcode: the receiver lowers to a field read, which leaves the
+        # index on top, which is the stack shape CALL_INDIRECT already wants.
+        program = compile_source(
+            self.OP + "fn main(): int {"
+            ' let p: Op = Op { name: "+", apply: add };'
+            " println(p.apply(1, 2)); return 0; }")
+        self.assertIn(OpCode.CALL_INDIRECT, [i.op for i in program.code])
+
+    def test_a_field_that_is_not_a_function(self):
+        self.assertCompileError(
+            self.OP + "fn main(): int {"
+            ' let p: Op = Op { name: "+", apply: add };'
+            " println(p.name(1)); return 0; }",
+            "Field 'name' has type str, not a function")
+
+    def test_wrong_arity(self):
+        self.assertCompileError(
+            self.OP + "fn main(): int {"
+            ' let p: Op = Op { name: "+", apply: add };'
+            " println(p.apply(1)); return 0; }",
+            "Field 'apply' expects 2 args, got 1")
+
+    def test_wrong_argument_type(self):
+        self.assertCompileError(
+            self.OP + "fn main(): int {"
+            ' let p: Op = Op { name: "+", apply: add };'
+            ' println(p.apply(1, "x")); return 0; }',
+            "expected int, got str")
+
+    def test_an_unknown_field(self):
+        self.assertCompileError(
+            self.OP + "fn main(): int {"
+            ' let p: Op = Op { name: "+", apply: add };'
+            " println(p.nope(1)); return 0; }",
+            "nope")
+
+    def test_a_null_receiver_faults_at_run_time(self):
+        # Like any other field read, and for the same reason.
+        self.assertRuntimeError(
+            self.OP + "fn main(): int { let p: Op = null;"
+            " println(p.apply(1, 2)); return 0; }",
+            "Null pointer dereference")
+
+    def test_a_turbofish_on_a_field_does_not_parse(self):
+        # Only a plain name can carry one, so this is refused before sema.
+        self.assertCompileError(
+            self.OP + "fn main(): int {"
+            ' let p: Op = Op { name: "+", apply: add };'
+            " println(p.apply::<int>(1, 2)); return 0; }",
+            "Expected ')'")
+
+    def test_an_arbitrary_expression_is_still_not_callable(self):
+        # The limitation is narrowed, not removed.
+        self.assertCompileError(
+            "fn inc(n: int): int { return n + 1; }\n"
+            "fn pick(): fn(int): int { return inc; }\n"
+            "fn main(): int { println(pick()(1)); return 0; }",
+            "Expected ')'")
+
+    def test_an_indexed_element_is_still_not_callable(self):
+        self.assertCompileError(
+            "fn inc(n: int): int { return n + 1; }\n"
+            "fn main(): int { let t: Array<fn(int): int> = array_new(1);"
+            " t[0] = inc; println(t[0](1)); return 0; }",
+            "Expected ')'")
+
+
 class TestBuiltinsAsValues(QuinTestCase):
     """An allowlisted builtin may be handed over, through a generated wrapper.
 

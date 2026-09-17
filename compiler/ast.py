@@ -35,6 +35,11 @@ class Binary(Expr):
 class Call(Expr):
     callee: str
     args: List[Expr]
+    # The expression the call goes through, when it is not a name. Holds the
+    # FieldAccess itself for `m.hash(key)`, so every pass reuses what it
+    # already does with one. None for an ordinary call, which is why nothing
+    # that dispatches on `callee` needed to change.
+    receiver: Optional[Expr] = None
     # Type arguments written out, `f::<int, str>(x)`. Empty when the call names
     # no generic function, or when its type arguments are inferred -- which is
     # the usual case, so this is usually empty even for a generic call.
