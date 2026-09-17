@@ -801,6 +801,16 @@ store16(p, 4321);
 println(load16(p));
 ```
 
+**A `ptr` stays in its frame.** Every frame has its own locals, so the same slot index names a different variable in every one of them — which makes `ptr` a compile error as a parameter type, a return type, or anywhere in a function type:
+
+```quin
+fn poke(p: ptr, v: int): void { store16(p, v); }   // error
+fn give(): ptr { let y: int = 1; return @y; }      // error
+let f: fn(ptr, int): void = store16;               // error
+```
+
+That is a type rule rather than a documented caveat because the failure it prevents is silent rather than loud. A `ptr` usually names a low slot, and a callee's low slots are its parameters, so a store through a passed pointer lands on the callee's own arguments — often on the pointer parameter itself. The caller's variable is never written, nothing faults at the call, and any fault appears later and elsewhere. The same rule is why `load16`, `store16`, `memcpy` and `memset` cannot be used as function values, while `alloc`, `heap_load` and `heap_store` can: a `heapptr` is a real address and means the same thing in every frame.
+
 Because a frame address is a slot index, `memcpy` / `memset` counts are measured in **slots (16-bit words)**, not bytes:
 
 ```quin
@@ -1273,7 +1283,7 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 ## Limitations and gotchas
 
 - Array indexing is bounds-checked at compile time for literal indices and at run time for everything else, `array_push` / `array_pop` included.
-- A `ptr` does not outlive the frame it points into.
+- A `ptr` cannot leave the frame it was taken in: it is not a parameter type, a return type, or part of a function type, and a builtin whose signature mentions one (`load16`, `store16`, `memcpy`, `memset`) cannot be used as a function value. A `heapptr` is unaffected — a heap address means the same thing in every frame.
 - Collection is triggered only by allocation pressure or an explicit `gc()`. Every collection moves every surviving object that has somewhere lower to go.
 - `float` is 32-bit single precision, so it carries about seven significant digits. There are no float arrays of either kind — `float[N]` and `Array<float>` are both refused, because a float is two words wide and both arrays count elements. There is no exponent notation in literals, and no `@` on a float.
 - A program can read, write and delete any path the host process can. There is no sandbox in the language; supply a `ProgramIO` that refuses if you need one.

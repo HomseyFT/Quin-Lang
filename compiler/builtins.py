@@ -15,11 +15,22 @@ BuiltinSig = Tuple[List[str], str]
 # until it hands one over.
 #
 # Written out rather than derived, because opting one in should be a decision.
-# The rule behind the list is that a builtin qualifies when its entry in
-# get_builtins() is its whole contract. That is what excludes array_push,
-# array_pop, array_new and array_len: their real shapes are settled in sema --
-# an int[N] that cannot be a parameter, an element type that comes from
-# context -- so there is no fixed signature to give a wrapper.
+# Two rules govern what may be here.
+#
+# A builtin qualifies when its entry in get_builtins() is its whole contract.
+# That excludes array_push, array_pop, array_new and array_len: their real
+# shapes are settled in sema -- an int[N] that cannot be a parameter, an
+# element type that comes from context -- so there is no fixed signature to
+# give a wrapper.
+#
+# The second rule is not encoded here at all, deliberately: a builtin whose
+# signature mentions `ptr` cannot be a function value, because a ptr indexes
+# the frame it was taken in and names a different slot in any other -- see
+# is_frame_relative in compiler_types.py. sema applies that rule to whatever is
+# listed, so load16, store16, memcpy and memset stay below and are refused by
+# the rule rather than by a carve-out somebody has to remember to keep. A
+# `heapptr` is a real address and means the same thing in every frame, so
+# alloc, heap_load and heap_store are unaffected.
 VALUE_BUILTINS = frozenset({
     # Conversions, which is what most higher-order code wants to pass.
     "int_to_str", "char_to_str", "float_to_str", "int_to_float", "float_to_int",
@@ -32,8 +43,8 @@ VALUE_BUILTINS = frozenset({
     "read_line", "argc", "argv",
     # Constant-time primitives, which exist to be composed.
     "ct_eq", "ct_select",
-    # Memory and lifecycle. Passing one is unusual, but nothing about it is
-    # unsound, and the criterion here is whether a wrapper can be correct.
+    # Memory and lifecycle. The four frame-relative ones are refused by the
+    # ptr rule, not by their absence here.
     "load16", "store16", "memcpy", "memset",
     "alloc", "heap_load", "heap_store", "gc", "panic",
 })

@@ -153,6 +153,26 @@ class TestTypeChecking(QuinTestCase):
             "fn main(): int { let n: int = 3; println(n(1)); return 0; }",
             "not a function")
 
+    def test_every_frame_relative_builtin_is_refused(self):
+        # Driven off the rule rather than off a list of names, so no builtin
+        # added later can slip through by being allowlisted: a ptr indexes the
+        # frame it was taken in, so a wrapper taking or returning one names a
+        # different slot than the caller meant.
+        from compiler.builtins import get_builtins
+        from compiler.compiler_types import is_frame_relative, type_from_name
+
+        checked = 0
+        for name, (params, ret) in sorted(get_builtins().items()):
+            signature = [type_from_name(t) for t in params] + [type_from_name(ret)]
+            if not any(is_frame_relative(t) for t in signature):
+                continue
+            checked += 1
+            with self.subTest(builtin=name):
+                self.assertCompileError(
+                    "fn main(): int { let f = " + name + "; return 0; }",
+                    "mentions 'ptr'")
+        self.assertEqual(checked, 4, "expected load16, store16, memcpy, memset")
+
     def test_a_builtin_off_the_allowlist_is_refused(self):
         # array_push's real shape is settled in sema -- an int[N] that cannot
         # be a parameter -- so there is no fixed signature to wrap. Saying that

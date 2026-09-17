@@ -223,6 +223,27 @@ def is_array_obj_type(t: Type) -> bool:
     return isinstance(t, ArrayObjType)
 
 
+def is_frame_relative(t: Type) -> bool:
+    """Whether a value of this type means something different in another frame.
+
+    A `ptr` is an index into the *current* frame's locals, and every frame has
+    its own. The same value therefore names a different slot in every frame, so
+    passing or returning one cannot mean what it looks like -- the callee's
+    slot 0 is not the caller's.
+
+    The symptom is worse than a wrong read. A `ptr` usually names a low slot,
+    and a callee's low slots are its parameters, so a store through one lands
+    on the callee's own arguments -- frequently on the pointer parameter
+    itself. Nothing faults at the call; something faults later, somewhere else,
+    if at all.
+
+    Which is why this is a type rule rather than a documented caveat: the
+    whole class is unrepresentable, and `ptr` stays what it is useful as, a
+    local naming another local in the same frame.
+    """
+    return t == Ptr
+
+
 def is_struct_type(t: Type) -> bool:
     return isinstance(t, StructType)
 
@@ -445,16 +466,25 @@ def type_from_name(name: str, structs: Optional[Dict[str, "StructInfo"]] = None,
         params = []
         for param_name in param_names:
             t = type_from_name(param_name, structs, enums)
-            # The same two rules a declared parameter obeys, enforced here so a
+            # The same rules a declared parameter obeys, enforced here so a
             # signature that could never be satisfied cannot be written down.
             if t == Void:
                 raise UnknownTypeError(f"'void' is not a parameter type in '{name}'")
             if is_array_type(t):
                 raise UnknownTypeError(f"An array is not a parameter type in '{name}'")
+            if is_frame_relative(t):
+                raise UnknownTypeError(
+                    f"'ptr' is not a parameter type in '{name}': it indexes the "
+                    f"frame it was taken in, so it names a different slot in "
+                    f"the one it is passed to")
             params.append(t)
         ret = type_from_name(ret_name, structs, enums)
         if is_array_type(ret):
             raise UnknownTypeError(f"An array is not a return type in '{name}'")
+        if is_frame_relative(ret):
+            raise UnknownTypeError(
+                f"'ptr' is not a return type in '{name}': the frame it indexes "
+                f"is gone by the time the caller has it")
         return func_type(params, ret)
     element_name = element_type_from_name(name)
     if element_name is not None:

@@ -660,5 +660,77 @@ class TestNull(QuinTestCase):
         )
 
 
+class TestAPointerCannotLeaveItsFrame(QuinTestCase):
+    """A `ptr` indexes the current frame's locals, and every frame has its own.
+
+    The same value therefore names a different slot in every frame, so passing
+    or returning one cannot mean what it looks like. This used to be a caveat
+    in the README; it is a type rule now, because the failure it describes is
+    not the failure that happens.
+
+    What actually happened: a ptr usually names a low slot, and a callee's low
+    slots are its parameters, so a store through one landed on the callee's own
+    arguments -- often on the pointer parameter itself. Nothing faulted at the
+    call. The caller's variable was simply never written, and any fault came
+    later and somewhere else.
+    """
+
+    def test_a_declared_parameter_is_refused(self):
+        self.assertCompileError(
+            "fn poke(p: ptr, v: int): void { store16(p, v); }\n"
+            "fn main(): int { let x: int = 0; poke(@x, 7); println(x); return 0; }",
+            "'ptr' is not a parameter type")
+
+    def test_a_declared_return_is_refused(self):
+        self.assertCompileError(
+            "fn give(): ptr { let y: int = 1; return @y; }\n"
+            "fn main(): int { println(load16(give())); return 0; }",
+            "cannot return a 'ptr'")
+
+    def test_a_function_type_mentioning_it_is_refused(self):
+        self.assertCompileError(
+            "fn apply(f: fn(ptr, int): void, p: ptr, v: int): void { f(p, v); }\n"
+            "fn main(): int { return 0; }",
+            "'ptr' is not a parameter type in 'fn(ptr,int):void'")
+
+    def test_a_function_type_returning_it_is_refused(self):
+        self.assertCompileError(
+            "fn main(): int { let f: fn(): ptr = nothing; return 0; }",
+            "'ptr' is not a return type")
+
+    def test_a_ptr_builtin_cannot_be_a_function_value(self):
+        # The type is built rather than parsed here, so the rule has to be
+        # applied where the wrapper is made as well as where a type is read.
+        for builtin in ("store16", "load16", "memcpy", "memset"):
+            with self.subTest(builtin=builtin):
+                self.assertCompileError(
+                    "fn main(): int { let f = " + builtin + "; return 0; }",
+                    "mentions 'ptr'")
+
+    def test_it_is_still_a_local(self):
+        # The rule removes the unsound case, not the useful one: a ptr naming
+        # another local in the same frame is what it is for.
+        self.assertPrints(
+            "fn main(): int { let x: int = 0; let p: ptr = @x;"
+            " store16(p, 7); println(x); println(load16(p)); return 0; }",
+            "7", "7")
+
+    def test_a_heapptr_still_crosses_freely(self):
+        # A heap address means the same thing in every frame, so nothing here
+        # applies to it.
+        self.assertPrints(
+            "fn fill(h: heapptr, v: int): heapptr { heap_store(h, v); return h; }\n"
+            "fn main(): int { let h: heapptr = alloc(4);"
+            " println(heap_load(fill(h, 9))); return 0; }",
+            "9")
+
+    def test_a_heapptr_builtin_is_still_a_value(self):
+        self.assertPrints(
+            "fn apply(f: fn(heapptr): int, h: heapptr): int { return f(h); }\n"
+            "fn main(): int { let h: heapptr = alloc(4); heap_store(h, 5);"
+            " println(apply(heap_load, h)); return 0; }",
+            "5")
+
+
 if __name__ == "__main__":
     unittest.main()

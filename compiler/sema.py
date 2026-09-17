@@ -7,7 +7,8 @@ from .compiler_types import (
     Type, Int, Str, Float, Void, Bool, Ptr, HeapPtr, Null, StructInfo, StructField,
     EnumInfo, VariantInfo, is_enum_type,
     type_from_name, is_array_type, array_length, is_struct_type, is_func_type, func_type, is_reference_type,
-    is_array_obj_type, generic_application, substitute_type_name, unify_type_name,
+    is_array_obj_type, is_frame_relative,
+    generic_application, substitute_type_name, unify_type_name,
     func_signature_from_name,
     assignable, comparable, word_count, BUILTIN_TYPES, UnknownTypeError,
 )
@@ -596,10 +597,22 @@ class SemanticAnalyzer:
                         f"arrays are local to the function that declares them",
                         p.line, p.col,
                     )
+                if is_frame_relative(pt):
+                    raise SemanticError(
+                        f"'ptr' is not a parameter type (parameter '{p.name}'): it "
+                        f"indexes the frame it was taken in, so it names a "
+                        f"different slot in '{fn.name}'",
+                        p.line, p.col,
+                    )
                 param_types.append(pt)
             ret_type = self._resolve_type(fn.return_type, fn.line, fn.col) if fn.return_type else Void
             if is_array_type(ret_type):
                 raise SemanticError(f"Function '{fn.name}' cannot return an array type", fn.line, fn.col)
+            if is_frame_relative(ret_type):
+                raise SemanticError(
+                    f"Function '{fn.name}' cannot return a 'ptr': the frame it "
+                    f"indexes is gone by the time the caller has it",
+                    fn.line, fn.col)
             if fn.name in self.ctx.functions:
                 raise SemanticError(f"Redefinition of function '{fn.name}'", fn.line, fn.col)
             self.ctx.functions[fn.name] = FunctionSig(fn.name, param_types, ret_type)
@@ -1009,6 +1022,18 @@ class SemanticAnalyzer:
         A program that never does this gets no extra function, which is why the
         allowlist is not simply compiled in.
         """
+        # First, because it is the more specific reason: the same rule a
+        # written-out signature obeys, applied here because a wrapper's type is
+        # built rather than parsed -- `let f = store16;` would otherwise reach
+        # a fn(ptr, int): void the type system never saw. This is also what
+        # excludes the frame-relative builtins from the allowlist, so that list
+        # does not have to carry a carve-out for them.
+        if any(is_frame_relative(t) for t in sig.params) or is_frame_relative(sig.ret):
+            raise SemanticError(
+                f"'{name}' cannot be used as a function value: its signature "
+                f"mentions 'ptr', which indexes the frame it was taken in and "
+                f"names a different slot in any other",
+                e.line, e.col, self._chain)
         if name not in VALUE_BUILTINS:
             raise SemanticError(
                 f"'{name}' cannot be used as a function value: its argument "

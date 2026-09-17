@@ -635,7 +635,16 @@ p = @a[1];     // address of an array element
 
 A `ptr` is an **index into the current frame's locals**, not a machine address. Consequences:
 
-- Pointers are only meaningful inside the frame that created them. Returning `@x` and dereferencing it in the caller reads an unrelated slot, or faults if the caller's frame is smaller.
+- A pointer is only meaningful inside the frame that created it, so **`ptr` is not a parameter type, a return type, or part of a function type**. All four are compile errors:
+
+  ```quin
+  fn poke(p: ptr, v: int): void { }   // error
+  fn give(): ptr { }                  // error
+  let f: fn(ptr): void = nothing;     // error
+  let g = store16;                    // error: its signature mentions ptr
+  ```
+
+  This is a type rule rather than a caveat because the failure it prevents is silent. A `ptr` usually names a low slot, and a callee's low slots are its parameters, so a store through a passed pointer lands on the callee's own arguments — frequently on the pointer parameter itself. The caller's variable is simply never written; nothing faults at the call, and anything that does faults later and somewhere else.
 - `memcpy` / `memset` counts are in **slots (16-bit words)**, not bytes.
 - Heap addresses are a *separate* address space with its own type, `heapptr`. Mixing the two is a compile error, not a silent misread: `load16(alloc(2))` and `heap_load(@x)` are both rejected.
 - `@` does **not** apply to a variable holding a reference — a `heapptr` or a struct:
