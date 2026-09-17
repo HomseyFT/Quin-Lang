@@ -36,7 +36,7 @@ include "../lib/util.ql";
 
 The resolver parses included files recursively (depth-first) and merges their functions into a single program. A file included twice, directly or through a cycle, is only processed once. Two files defining the same function name is an error.
 
-`std/` provides `math.ql` (integer math), `bits.ql` (bit manipulation), `io.ql` (output helpers), `string.ql` (string helpers), `vec.ql` (`Vec<T>`), `list.ql` (`List<T>`), `option.ql` (`Option<T>`), `result.ql` (`Result<T, E>`), `float.ql`, `input.ql`, and `prelude.ql`, which includes the function-only ones:
+`std/` provides `math.ql` (integer math), `bits.ql` (bit manipulation), `io.ql` (output helpers), `string.ql` (string helpers, splitting and joining), `parse.ql` (text to values, as `Option`s), `fs.ql` (files, as `Result`s), `vec.ql` (`Vec<T>`), `list.ql` (`List<T>`), `option.ql` (`Option<T>`), `result.ql` (`Result<T, E>`), `float.ql`, `input.ql`, and `prelude.ql`, which includes the function-only ones:
 
 ```quin
 include "std/prelude.ql";     // math, bits, io, string
@@ -44,6 +44,8 @@ include "std/vec.ql";         // Vec<T>   — opt in, it declares a type
 include "std/list.ql";        // List<T>  — likewise
 include "std/option.ql";      // Option<T>
 include "std/result.ql";      // Result<T, E>
+include "std/parse.ql";       // parse_int and friends, returning Option
+include "std/fs.ql";          // files, as Results
 ```
 
 The modules that declare a type stay out of the prelude because a struct or enum name is global once included. See [README.md](README.md#multi-file-programs) for what each module contains.

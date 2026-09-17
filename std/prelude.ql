@@ -11,8 +11,12 @@
 //     include "std/list.ql";     // List<T>
 //     include "std/option.ql";   // Option<T>
 //     include "std/result.ql";   // Result<T, E>
+//     include "std/parse.ql";    // parse_int and friends, returning Option
+//     include "std/fs.ql";       // files, as Results
 //
 // std/vec.ql and std/list.ql each include std/option.ql, for their try_get.
+// std/parse.ql and std/fs.ql declare no type themselves but include ones that
+// do, which reaches the same result: a name taken out of a program's hands.
 
 include "std/math.ql";
 include "std/bits.ql";

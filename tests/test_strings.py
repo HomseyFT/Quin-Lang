@@ -499,5 +499,102 @@ class TestStringLibrary(QuinTestCase):
             "HI", "2")
 
 
+class TestSplitting(QuinTestCase):
+    """Splitting, at the edges where a hand-written splitter goes wrong.
+
+    The rule is that N separators give N + 1 pieces, always -- which is what
+    makes str_join the exact inverse, and what decides every case below.
+    """
+
+    def lib(self, body: str) -> str:
+        return f'include "std/string.ql";\nfn main(): int {{\n{body}\n    return 0;\n}}\n'
+
+    def split(self, text: str, sep: int = 44) -> str:
+        return self.lib(
+            f'let p: Array<str> = str_split({text}, {sep});\n'
+            'println(array_len(p)); println(str_join(p, "|"));')
+
+    def test_the_ordinary_case(self):
+        self.assertPrints(self.split('"a,b,c"'), "3", "a|b|c")
+
+    def test_an_empty_string_is_one_empty_piece(self):
+        self.assertPrints(self.split('""'), "1", "")
+
+    def test_no_separator_present(self):
+        self.assertPrints(self.split('"abc"'), "1", "abc")
+
+    def test_a_leading_and_trailing_separator(self):
+        self.assertPrints(self.split('",a,"'), "3", "|a|")
+
+    def test_consecutive_separators(self):
+        self.assertPrints(self.split('"a,,b"'), "3", "a||b")
+
+    def test_the_separator_alone(self):
+        self.assertPrints(self.split('","'), "2", "|")
+
+    def test_join_is_the_inverse_of_split(self):
+        self.assertPrints(self.lib(
+            'println(str_join(str_split("x:y:z", 58), ":"));\n'
+            'println(str_join(str_split("", 58), ":"));\n'
+            'println(str_join(str_split(":a::b:", 58), ":"));'),
+            "x:y:z", "", ":a::b:")
+
+    def test_join_of_one_piece_has_no_separator(self):
+        self.assertPrints(self.lib(
+            'let p: Array<str> = array_new(1);\n'
+            'p[0] = "only";\n'
+            'println(str_join(p, ", "));'),
+            "only")
+
+
+class TestLines(QuinTestCase):
+    def lib(self, body: str) -> str:
+        return f'include "std/string.ql";\nfn main(): int {{\n{body}\n    return 0;\n}}\n'
+
+    def count(self, text: str) -> str:
+        return self.lib(f'println(array_len(str_lines({text})));')
+
+    def test_a_trailing_newline_does_not_add_a_line(self):
+        # The difference between a file of two lines and one of three, which is
+        # why this is not simply str_split(s, 10).
+        self.assertPrints(self.count(r'"one\ntwo\n"'), "2")
+
+    def test_no_trailing_newline_is_the_same_count(self):
+        self.assertPrints(self.count(r'"one\ntwo"'), "2")
+
+    def test_an_empty_text_has_no_lines(self):
+        # Not one empty line: that is the difference between a file with
+        # nothing in it and one holding a single blank line.
+        self.assertPrints(self.count('""'), "0")
+
+    def test_a_single_blank_line(self):
+        self.assertPrints(self.count(r'"\n"'), "1")
+
+    def test_blank_lines_in_the_middle_are_kept(self):
+        self.assertPrints(self.lib(
+            r'let l: Array<str> = str_lines("a\n\nb\n");' "\n"
+            'println(array_len(l)); println(str_join(l, "|"));'),
+            "3", "a||b")
+
+
+class TestReplace(QuinTestCase):
+    def lib(self, body: str) -> str:
+        return f'include "std/string.ql";\nfn main(): int {{\n{body}\n    return 0;\n}}\n'
+
+    def test_replacing(self):
+        self.assertPrints(self.lib(
+            'println(str_replace("a-b-c", "-", " and "));\n'
+            'println(str_replace("aaa", "aa", "b"));\n'
+            'println(str_replace("abc", "z", "!"));\n'
+            'println(str_replace("abc", "abc", ""));'),
+            "a and b and c", "ba", "abc", "")
+
+    def test_an_empty_needle_is_refused(self):
+        # It would match everywhere and never advance.
+        self.assertRuntimeError(
+            self.lib('println(str_replace("abc", "", "x"));'),
+            "needs something to find")
+
+
 if __name__ == "__main__":
     unittest.main()

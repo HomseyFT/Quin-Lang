@@ -115,13 +115,14 @@ fn main(): int {
 | --- | --- |
 | `std/math.ql` | `abs`, `min`, `max`, `clamp`, `sign`, `is_even`, `is_odd`, `pow`, `gcd`, `lcm`, `isqrt` |
 | `std/bits.ql` | `bit_get` / `bit_set` / `bit_clear` / `bit_toggle`, `popcount`, `reverse_bits`, `leading_zeros`, `trailing_zeros`, `highest_bit`, `rotate_left` / `rotate_right`, `logical_shift_right` |
-| `std/string.ql` | Searching, slicing, case conversion, trimming, parsing, character predicates, and `show_str` / `show_bool` for handing a renderer to `vec_show` and friends — for int, char and float the builtin itself is the renderer |
+| `std/string.ql` | Searching, slicing, case conversion, trimming, parsing, character predicates, `str_split` / `str_join` / `str_lines` / `str_replace`, and `show_str` / `show_bool` for handing a renderer to `vec_show` and friends — for int, char and float the builtin itself is the renderer |
+| `std/parse.ql` | `parse_int`, `parse_uint`, `parse_bool` returning `Option`, and `parse_int_or` |
 | `std/io.ql` | `newline`, `print_repeat`, `print_spaces`, `print_line`, `hex_digit`, `print_hex` / `println_hex`, `print_binary` / `println_binary`, `print_padded` |
 | `std/vec.ql` | `Vec<T>`, a growable array over an `Array<T>`: `vec_new`, `vec_of`, `vec_push`, `vec_get`, `vec_try_get`, `vec_set`, `vec_pop`, `vec_reverse`, `vec_map`, `vec_filter`, `vec_fold`, `vec_any` / `vec_all`, `vec_show`, and `vec_sum` / `vec_max` / `vec_min` over `Vec<int>` |
 | `std/list.ql` | `List<T>`, a persistent singly linked list: `list_push`, `list_of`, `list_len`, `list_get`, `list_try_get`, `list_reverse`, `list_contains`, the same higher-order set, and `list_sum` / `list_max` / `list_min` over `List<int>` |
 | `std/option.ql` | `Option<T>`: `option_is_some`, `option_is_none`, `option_unwrap`, `option_unwrap_or`, `option_map`, `option_show` |
 | `std/result.ql` | `Result<T, E>`: `result_is_ok`, `result_is_err`, `result_unwrap`, `result_unwrap_or`, `result_map`, `result_ok` / `result_err` into an `Option`, `result_show` |
-| `std/fs.ql` | `fs_read`, `fs_write`, `fs_append`, `fs_read_bytes` / `fs_write_bytes`, `fs_delete` as `Result`s, plus `fs_exists` and `fs_read_or` |
+| `std/fs.ql` | `fs_read`, `fs_read_lines`, `fs_write`, `fs_append`, `fs_read_bytes` / `fs_write_bytes`, `fs_delete` as `Result`s, plus `fs_exists` and `fs_read_or` |
 | `std/float.ql` | `fabs`, `fmin`, `fmax`, `fsign`, `floor`, `ceil`, `round`, `ftrunc`, `fpow`, `fclose` |
 | `std/prelude.ql` | Includes the three function-only modules above, so one include brings in the common helpers |
 
@@ -726,6 +727,30 @@ Content is **bytes**, like everything else a `str` holds: a file of arbitrary by
 **Where files come from is not the interpreter's business.** The VM reaches the filesystem through the same `ProgramIO` object output goes to, so an embedder supplies its own — a virtual tree, a sandbox that refuses everything by raising `OSError`, or an in-memory dictionary. That last one is what the test suite uses, which is why `tests/test_files.py` exercises the whole path without touching a disk or cleaning up after itself.
 
 Running out of heap is still a fault, not a reported failure: that is the allocator failing rather than the file, and `file_read_bytes` on a file larger than the 64 KiB heap says so.
+
+#### Splitting, and turning text into values
+
+```quin
+match (fs_read_lines("nums.txt")) {
+    Result::Ok(lines) => {
+        for (let i = 0; i < array_len(lines); i = i + 1) {
+            match (parse_int(lines[i])) {
+                Option::Some(n) => { total = total + n; }
+                Option::None    => { println("not a number: " + lines[i]); }
+            }
+        }
+    }
+    Result::Err(why) => { println("could not read it: " + why); }
+}
+```
+
+`str_split` returns an **`Array<str>`**, not a `Vec<str>` or a `List<str>`. `Array` is a builtin type, so `std/string.ql` still declares nothing of its own and stays safe to pull in from the prelude — a `Vec` would take that name out of every prelude user's hands. Splitting counts its separators first and allocates exactly once.
+
+The rule is that **N separators give N + 1 pieces, always**: splitting `""` gives one empty piece and `"a,,b"` gives three. That is what makes `str_join` the exact inverse. `str_lines` is the exception, and deliberately so — a trailing newline ends the last line rather than starting an empty one, and an empty text has no lines at all, because otherwise a file of three lines would read as having four.
+
+**Parsing comes in two forms, and both stay.** `str_parse_int` panics on anything malformed, which is right for text you wrote yourself. `parse_int` returns an `Option<int>`, which is the only usable one for text that arrived from a file, an argument or a user. Overflow is `None` rather than a wrapped value — the check happens before the multiply, since after it the value has already wrapped and there is nothing left to notice. That matters more here than in most languages, because the ceiling is 32767.
+
+`std/parse.ql` is its own module rather than part of `std/string.ql` because it includes `std/option.ql`, which declares a type — and nothing in the prelude may.
 
 ### The two address spaces
 

@@ -614,6 +614,78 @@ class TestOptionAndResult(QuinTestCase):
             "Err(404)")
 
 
+class TestParse(QuinTestCase):
+    """Parsing that reports instead of stopping.
+
+    std/string.ql's str_parse_int panics on anything malformed, which is right
+    for text you wrote and useless for text that arrived. These are the same
+    inputs through both, so the difference is visible rather than described.
+    """
+
+    def parse(self, body: str) -> str:
+        return program(["string", "parse"], body)
+
+    def show(self, expr: str) -> str:
+        return self.parse(f'println(option_show({expr}, int_to_str));')
+
+    def test_the_ordinary_cases(self):
+        self.assertPrints(self.parse(
+            'println(option_show(parse_int("42"), int_to_str));\n'
+            'println(option_show(parse_int("-7"), int_to_str));\n'
+            'println(option_show(parse_int("+5"), int_to_str));\n'
+            'println(option_show(parse_int("007"), int_to_str));'),
+            "Some(42)", "Some(-7)", "Some(5)", "Some(7)")
+
+    def test_the_ends_of_the_range(self):
+        # -32768 has no positive counterpart to accumulate, so it is the one
+        # value parse_int cannot reach the ordinary way.
+        self.assertPrints(self.parse(
+            'println(option_show(parse_int("32767"), int_to_str));\n'
+            'println(option_show(parse_int("-32768"), int_to_str));'),
+            "Some(32767)", "Some(-32768)")
+
+    def test_overflow_is_none_not_a_wrapped_value(self):
+        # The check happens before the multiply. After it, the value has
+        # already wrapped and there is nothing left to notice.
+        self.assertPrints(self.parse(
+            'println(option_is_none(parse_int("32768")));\n'
+            'println(option_is_none(parse_int("99999")));\n'
+            'println(option_is_none(parse_int("123456789")));'),
+            "true", "true", "true")
+
+    def test_every_malformed_shape(self):
+        for text in ('""', '"-"', '"+"', '"12a"', '" 12"', '"12 "', '"1.5"', '"--1"'):
+            with self.subTest(text=text):
+                self.assertPrints(self.parse(
+                    f'println(option_is_none(parse_int({text})));'), "true")
+
+    def test_the_panicking_form_still_panics(self):
+        # Both forms stay: one for text you wrote, one for text that arrived.
+        self.assertRuntimeError(self.parse('println(str_parse_int("12a"));'),
+                                "not a digit")
+
+    def test_parse_uint_refuses_a_sign(self):
+        self.assertPrints(self.parse(
+            'println(option_is_none(parse_uint("-1")));\n'
+            'println(option_is_none(parse_uint("+1")));\n'
+            'println(option_show(parse_uint("9"), int_to_str));'),
+            "true", "true", "Some(9)")
+
+    def test_parse_bool(self):
+        self.assertPrints(program(["string", "parse"],
+            'println(option_show(parse_bool("true"), show_bool));\n'
+            'println(option_show(parse_bool("false"), show_bool));\n'
+            'println(option_is_none(parse_bool("yes")));\n'
+            'println(option_is_none(parse_bool("True")));'),
+            "Some(true)", "Some(false)", "true", "true")
+
+    def test_parse_int_or_falls_back(self):
+        self.assertPrints(self.parse(
+            'println(parse_int_or("12", 0));\n'
+            'println(parse_int_or("nope", 0 - 1));'),
+            "12", "-1")
+
+
 class TestPrelude(QuinTestCase):
     def test_one_include_brings_in_the_pure_modules(self):
         self.assertPrints(program(["prelude"],

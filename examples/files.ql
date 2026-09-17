@@ -13,6 +13,7 @@
 
 include "std/fs.ql";
 include "std/string.ql";
+include "std/parse.ql";
 
 // A path in the working directory, removed before this program exits.
 fn scratch(): str {
@@ -36,6 +37,26 @@ fn main(): int {
         Result::Ok(text) => {
             print(text);
             println(str_len(text));
+        }
+        Result::Err(why) => { println("could not read: " + why); }
+    }
+
+    println("-- lines and values --");
+    // The point of all of it: a file becomes values. Read it, split it, and
+    // parse each piece -- where a piece that is not a number is a None to
+    // handle rather than a panic that ends the run.
+    fs_write(scratch(), "10\n20\nthirty\n40\n");
+    match (fs_read_lines(scratch())) {
+        Result::Ok(lines) => {
+            println(array_len(lines));
+            let total: int = 0;
+            for (let i = 0; i < array_len(lines); i = i + 1) {
+                match (parse_int(lines[i])) {
+                    Option::Some(n) => { total = total + n; }
+                    Option::None => { println("not a number: " + lines[i]); }
+                }
+            }
+            println(total);
         }
         Result::Err(why) => { println("could not read: " + why); }
     }

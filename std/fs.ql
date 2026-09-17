@@ -11,6 +11,7 @@
 // into a type. A Result you have to match is a failure you cannot walk past.
 
 include "std/result.ql";
+include "std/string.ql";
 
 // The reason the last file operation failed, as a Result. Every wrapper below
 // is this shape: do the thing, then ask.
@@ -50,6 +51,16 @@ fn fs_write_bytes(path: str, data: Array<int>): Result<int, str> {
 fn fs_delete(path: str): Result<int, str> {
     file_delete(path);
     return fs_check(0);
+}
+
+// The file's lines, with a trailing newline understood as ending the last one
+// rather than starting an empty one -- so a file of three lines gives three
+// however it was written. An empty file gives none.
+fn fs_read_lines(path: str): Result<Array<str>, str> {
+    match (fs_read(path)) {
+        Result::Ok(text) => { return Result::Ok(str_lines(text)); }
+        Result::Err(why) => { return Result::Err(why); }
+    }
 }
 
 // Not a Result: a file not being there is an answer, not a failure.

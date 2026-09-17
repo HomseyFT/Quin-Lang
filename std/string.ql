@@ -215,6 +215,9 @@ fn str_trim(s: str): str {
 // The decimal int a string spells, with an optional leading sign. Anything
 // else panics rather than guessing. The result wraps at 16 bits, as any other
 // arithmetic would.
+// Parse a decimal int, stopping the program on anything malformed. For text
+// you wrote yourself. For text that came from a file or a user, std/parse.ql
+// has parse_int, which returns an Option instead.
 fn str_parse_int(s: str): int {
     let n: int = str_len(s);
     if (n == 0) {
@@ -245,6 +248,94 @@ fn str_parse_int(s: str): int {
         return 0 - value;
     }
     return value;
+}
+
+// -- splitting and joining -------------------------------------------------
+//
+// These return Array<str> rather than Vec<str> or List<str> on purpose. Array
+// is a builtin type, so this module still declares nothing of its own and stays
+// safe to pull in from the prelude -- a Vec would take the name `Vec` out of
+// every prelude user's hands.
+//
+// Each counts the separators first and allocates exactly once. A growable would
+// allocate as it went, and the count is one cheap pass over a string that has
+// to be walked anyway.
+
+fn str_count_separators(s: str, sep: int): int {
+    let n: int = 0;
+    for (let i = 0; i < str_len(s); i = i + 1) {
+        if (str_char_at(s, i) == sep) {
+            n = n + 1;
+        }
+    }
+    return n;
+}
+
+// Split on a character code. N separators give N + 1 pieces, always: splitting
+// "" gives one empty piece, and "a,,b" gives three with the middle one empty.
+// That is what makes str_join the exact inverse.
+fn str_split(s: str, sep: int): Array<str> {
+    let out: Array<str> = array_new(str_count_separators(s, sep) + 1);
+    let piece: int = 0;
+    let start: int = 0;
+    for (let i = 0; i < str_len(s); i = i + 1) {
+        if (str_char_at(s, i) == sep) {
+            out[piece] = str_slice(s, start, i);
+            piece = piece + 1;
+            start = i + 1;
+        }
+    }
+    out[piece] = str_slice(s, start, str_len(s));
+    return out;
+}
+
+fn str_join(parts: Array<str>, sep: str): str {
+    let out: str = "";
+    for (let i = 0; i < array_len(parts); i = i + 1) {
+        if (i > 0) {
+            out = out + sep;
+        }
+        out = out + parts[i];
+    }
+    return out;
+}
+
+// The lines of a text, with a trailing newline understood as ending the last
+// line rather than starting an empty one. That difference is the whole reason
+// this is not just str_split(s, 10): a file that ends in a newline would
+// otherwise read as having one more line than it has.
+fn str_lines(s: str): Array<str> {
+    // An empty text has no lines. Splitting would say it has one empty one,
+    // which is the difference between a file with nothing in it and a file
+    // holding a single blank line.
+    if (str_len(s) == 0) {
+        return array_new(0);
+    }
+    let text: str = s;
+    if (str_len(text) > 0 && str_char_at(text, str_len(text) - 1) == 10) {
+        text = str_slice(text, 0, str_len(text) - 1);
+    }
+    return str_split(text, 10);
+}
+
+// Replace every occurrence. A `find` that is empty would match everywhere and
+// never advance, so it is refused rather than looping.
+fn str_replace(s: str, find: str, replace: str): str {
+    if (str_len(find) == 0) {
+        panic("str_replace needs something to find");
+    }
+    let out: str = "";
+    let i: int = 0;
+    while (i < str_len(s)) {
+        if (str_starts_with(str_slice(s, i, str_len(s)), find)) {
+            out = out + replace;
+            i = i + str_len(find);
+        } else {
+            out = out + char_to_str(str_char_at(s, i));
+            i = i + 1;
+        }
+    }
+    return out;
 }
 
 // -- rendering, as values ---------------------------------------------------

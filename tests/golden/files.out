@@ -6,6 +6,10 @@ true
 first line
 second line
 23
+-- lines and values --
+4
+not a number: thirty
+70
 -- bytes --
 bytes : Ok(3)
 3
