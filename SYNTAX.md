@@ -78,7 +78,7 @@ A compile error exits `2` and a runtime error exits `3`, so the tool's own failu
 
 ### Functions as values
 
-A function's name in any position other than a call is a value naming that function:
+A function's name in any position other than a call is a value naming that function. Most builtins count; see [Built-in functions](#built-in-functions) for the four that do not:
 
 ```quin
 fn add(a: int, b: int): int { return a + b; }
@@ -656,6 +656,8 @@ Argument count and types must match the signature exactly. Arguments are evaluat
 ## Built-in functions
 
 Always available and lowered directly by the compiler; they cannot be shadowed by user functions.
+
+Most may also be used as a **function value** — `vec_map(v, int_to_str)` — in which case the compiler generates a wrapper to hold the function-table index: once per builtin, and only for one a program actually hands over. A direct call still lowers to the opcode. The exceptions are `array_push`, `array_pop`, `array_new` and `array_len`, whose argument shapes and types are settled at each call site rather than by the fixed signature below, so there is no one function to refer to.
 
 | Signature | Summary |
 | --- | --- |

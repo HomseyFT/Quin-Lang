@@ -232,6 +232,35 @@ fn main(): int {
         self.assertNotIn("Holder", [s.name for s in back.structs if s])
 
 
+class TestBuiltinWrappersNeedNoFormatChange(RoundTripTestCase):
+    """A generated wrapper is an ordinary function, and that is the claim."""
+
+    SOURCE = """
+fn apply(f: fn(int): str, n: int): str { return f(n); }
+
+fn main(): int {
+    println(apply(int_to_str, 7));
+    println(int_to_str(8));
+    return 0;
+}
+"""
+
+    def test_the_wrapper_survives_as_a_function(self):
+        program, back = self.round_trip(self.SOURCE)
+        self.assertEqual(back.code, program.code)
+        self.assertIn("int_to_str", [f.name for f in back.functions])
+
+    def test_it_comes_back_with_its_signature(self):
+        _, back = self.round_trip(self.SOURCE)
+        wrapper = next(f for f in back.functions if f.name == "int_to_str")
+        self.assertEqual(wrapper.num_params, 1)
+
+    def test_the_value_is_still_an_index_into_the_table(self):
+        _, back = self.round_trip(self.SOURCE)
+        index = [f.name for f in back.functions].index("int_to_str")
+        self.assertIn(index, [i.arg for i in back.code if i.op is OpCode.PUSH_INT])
+
+
 class TestStripping(RoundTripTestCase):
     def test_the_running_tables_are_all_still_there(self):
         program, back = self.round_trip(debug=False)

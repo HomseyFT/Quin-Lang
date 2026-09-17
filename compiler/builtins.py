@@ -6,6 +6,39 @@ from typing import Dict, List, Tuple
 BuiltinSig = Tuple[List[str], str]
 
 
+# Which builtins may be named as a function value, rather than only called.
+#
+# A builtin has no entry in the function table -- it lowers to instructions at
+# the call site -- so there is no index for a value to hold. The compiler
+# synthesises a one-line wrapper for the ones listed here, and only for the ones
+# a program actually uses that way, so nothing below costs a program anything
+# until it hands one over.
+#
+# Written out rather than derived, because opting one in should be a decision.
+# The rule behind the list is that a builtin qualifies when its entry in
+# get_builtins() is its whole contract. That is what excludes array_push,
+# array_pop, array_new and array_len: their real shapes are settled in sema --
+# an int[N] that cannot be a parameter, an element type that comes from
+# context -- so there is no fixed signature to give a wrapper.
+VALUE_BUILTINS = frozenset({
+    # Conversions, which is what most higher-order code wants to pass.
+    "int_to_str", "char_to_str", "float_to_str", "int_to_float", "float_to_int",
+    # Strings.
+    "str_len", "str_char_at", "str_slice",
+    # Files.
+    "file_read", "file_write", "file_append", "file_exists", "file_delete",
+    "file_error", "file_read_bytes", "file_write_bytes",
+    # Input and arguments.
+    "read_line", "argc", "argv",
+    # Constant-time primitives, which exist to be composed.
+    "ct_eq", "ct_select",
+    # Memory and lifecycle. Passing one is unusual, but nothing about it is
+    # unsound, and the criterion here is whether a wrapper can be correct.
+    "load16", "store16", "memcpy", "memset",
+    "alloc", "heap_load", "heap_store", "gc", "panic",
+})
+
+
 def get_builtins() -> Dict[str, BuiltinSig]:
     return {
         "load16":   (["ptr"], "int"),

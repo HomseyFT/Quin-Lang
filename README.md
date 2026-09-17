@@ -115,7 +115,7 @@ fn main(): int {
 | --- | --- |
 | `std/math.ql` | `abs`, `min`, `max`, `clamp`, `sign`, `is_even`, `is_odd`, `pow`, `gcd`, `lcm`, `isqrt` |
 | `std/bits.ql` | `bit_get` / `bit_set` / `bit_clear` / `bit_toggle`, `popcount`, `reverse_bits`, `leading_zeros`, `trailing_zeros`, `highest_bit`, `rotate_left` / `rotate_right`, `logical_shift_right` |
-| `std/string.ql` | Searching, slicing, case conversion, trimming, parsing, character predicates, and `show_int` / `show_str` / `show_bool` / `show_char` for handing a renderer to `vec_show` and friends |
+| `std/string.ql` | Searching, slicing, case conversion, trimming, parsing, character predicates, and `show_str` / `show_bool` for handing a renderer to `vec_show` and friends — for int, char and float the builtin itself is the renderer |
 | `std/io.ql` | `newline`, `print_repeat`, `print_spaces`, `print_line`, `hex_digit`, `print_hex` / `println_hex`, `print_binary` / `println_binary`, `print_padded` |
 | `std/vec.ql` | `Vec<T>`, a growable array over an `Array<T>`: `vec_new`, `vec_of`, `vec_push`, `vec_get`, `vec_try_get`, `vec_set`, `vec_pop`, `vec_reverse`, `vec_map`, `vec_filter`, `vec_fold`, `vec_any` / `vec_all`, `vec_show`, and `vec_sum` / `vec_max` / `vec_min` over `Vec<int>` |
 | `std/list.ql` | `List<T>`, a persistent singly linked list: `list_push`, `list_of`, `list_len`, `list_get`, `list_try_get`, `list_reverse`, `list_contains`, the same higher-order set, and `list_sum` / `list_max` / `list_min` over `List<int>` |
@@ -127,7 +127,7 @@ fn main(): int {
 
 The four modules that declare a type are not in the prelude, because a struct or enum name is global once included. Include those by name when you want them.
 
-Each collection is written **once**, not once per element type. `Vec<int>` and `Vec<str>` are two instantiations of one module, so there is no second copy to drift — and because they are separate instantiations, the collector traces a `Vec<str>`'s elements and never looks inside a `Vec<int>`. A function that renders elements takes a `fn(T): str`, since only the caller knows how to show a `T`; `std/string.ql` ships `show_int` and friends because a builtin like `int_to_str` cannot itself be a function value.
+Each collection is written **once**, not once per element type. `Vec<int>` and `Vec<str>` are two instantiations of one module, so there is no second copy to drift — and because they are separate instantiations, the collector traces a `Vec<str>`'s elements and never looks inside a `Vec<int>`. A function that renders elements takes a `fn(T): str`, since only the caller knows how to show a `T`; `std/string.ql` ships `int_to_str` and friends because a builtin like `int_to_str` cannot itself be a function value.
 
 Two constraints shaped the library. Arrays cannot be parameters or return types, so anything that crosses a function boundary is built from structs — a linked list, or a `heapptr` field wrapped in one. Strings, by contrast, are now first-class heap objects, which is what makes `std/string.ql` possible at all.
 
@@ -193,6 +193,12 @@ fn main(): int {
 ```
 
 The type is written the way the declaration is, minus the parameter names: `fn(int, int): int`. Omitting `: R` means `void`, so `fn(str)` and `fn(str): void` are the same type. Function types nest, so `fn(fn(int): int): void` is a function taking a function.
+
+**An allowlisted builtin can be one too.** `vec_show(v, int_to_str)` works, even though a builtin lowers to instructions and has no entry in the function table: the compiler generates a one-line wrapper to hold the index, carrying the builtin's own name so a backtrace through it reads as the thing it is.
+
+Two properties are what the allowlist buys. The wrapper is generated **only for a builtin a program actually hands over**, so a program that never does this has nothing extra in its function table. And a **direct call still lowers to the opcode** — the wrapper exists for the value, not for the call, so nothing pays for one existing.
+
+`array_push`, `array_pop`, `array_new` and `array_len` are excluded, and the rule behind that is the whole allowlist: a builtin qualifies when its entry in the builtins table is its whole contract. Those four have their real shapes settled in sema — an `int[N]` that cannot be a parameter, an element type that comes from context — so there is no fixed signature to wrap, and naming one as a value says so.
 
 A function value is **one word holding an index into the program's function table** — not a heap address. It allocates nothing, the collector never traces one, and a `fn` field costs a struct exactly one slot. `std/list.ql` and `std/vec.ql` use this for `map`, `filter`, `fold`, `foreach`, `any` and `all` — generic in the element type, so one definition serves every one of them.
 
@@ -1225,6 +1231,7 @@ There is no dependency-install step, because there are no dependencies. `tests/t
 - `print` takes a variable name, not an expression. A `struct` already shows its fields, so `print p` covers most of what `print p.x` would.
 - A shadowed name shows every declaration rather than the live one. The slot table carries no scope ranges, so which is in scope at a given pc is not knowable from it; showing all of them is honest where a guess would be confidently wrong.
 - A breakpoint on a line with no code of its own moves forward to the next line that has some.
+- A builtin whose argument shapes are settled per call site — `array_push`, `array_pop`, `array_new`, `array_len` — cannot be used as a function value. Every other builtin can.
 - A function value carries no captured environment, and a call names a variable or a function rather than an arbitrary expression, so `table[i](x)` and `f()(x)` go through a local first.
 
 Future directions: scope ranges on the slot table, so a shadowed `print x` can name the live declaration; liveness analysis so a variable dead but still in scope stops rooting its object; and filling out `std/`.

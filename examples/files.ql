@@ -22,7 +22,7 @@ fn scratch(): str {
 fn report(label: str, r: Result<int, str>): void {
     print(label);
     print(": ");
-    println(result_show(r, show_int, show_str));
+    println(result_show(r, int_to_str, show_str));
 }
 
 fn main(): int {

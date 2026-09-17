@@ -149,7 +149,7 @@ fn vec_reverse<T>(v: Vec<T>): void {
 
 // -- higher order -----------------------------------------------------------
 
-// The element type may change: mapping show_int over a Vec<int> gives a
+// The element type may change: mapping int_to_str over a Vec<int> gives a
 // Vec<str>. Writing that down is what generics and function values are for.
 fn vec_map<T, U>(v: Vec<T>, f: fn(T): U): Vec<U> {
     let out: Vec<U> = vec_new(v.len + 1);
@@ -202,7 +202,7 @@ fn vec_all<T>(v: Vec<T>, pred: fn(T): bool): bool {
 }
 
 // Rendering needs a T -> str, which only the caller has. std/string.ql ships
-// show_int and friends for the builtin types, since a builtin cannot be passed
+// int_to_str and friends for the builtin types, since a builtin cannot be passed
 // as a function value.
 fn vec_show<T>(v: Vec<T>, show: fn(T): str): str {
     let out: str = "[";

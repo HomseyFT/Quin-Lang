@@ -11,7 +11,7 @@ from .compiler_types import (
     func_signature_from_name,
     assignable, comparable, word_count, BUILTIN_TYPES, UnknownTypeError,
 )
-from .builtins import get_builtins
+from .builtins import get_builtins, VALUE_BUILTINS
 
 # A process exit code carries one byte, so only these values survive intact.
 EXIT_CODE_MAX = 255
@@ -266,6 +266,9 @@ class SemanticAnalyzer:
         self._pending: List[Tuple[A.Function, List[str]]] = []
         # The chain in force, empty outside an instantiated body.
         self._chain: List[str] = []
+        # Builtins already given a wrapper, so one is generated at most once
+        # however many times the builtin is handed over.
+        self._wrapped: Set[str] = set()
 
     def _resolve_type(self, name: str, line: int, col: int) -> Type:
         """Map a source-level type name onto a concrete Type, with location on failure."""
@@ -994,6 +997,56 @@ class SemanticAnalyzer:
             f"'{e.struct_name}::<{', '.join(params)}> {{ ... }}'",
             e.line, e.col, self._chain)
 
+    def _builtin_value(self, name: str, sig: FunctionSig, e: A.Expr) -> Type:
+        """A builtin named in a value position.
+
+        A builtin lowers to instructions at the call site and has no entry in
+        the function table, so there is no index for a value to hold. One is
+        generated to hold it -- a wrapper carrying the builtin's own name, so
+        that a backtrace through it reads as the thing it is.
+
+        Generated once, and only for a builtin something actually hands over.
+        A program that never does this gets no extra function, which is why the
+        allowlist is not simply compiled in.
+        """
+        if name not in VALUE_BUILTINS:
+            raise SemanticError(
+                f"'{name}' cannot be used as a function value: its argument "
+                f"shapes are settled at each call site rather than by a fixed "
+                f"signature, so there is no one function to refer to",
+                e.line, e.col, self._chain)
+        if name not in self._wrapped:
+            self._wrapped.add(name)
+            # Queued rather than analyzed here: this is reached from inside the
+            # body of whatever named the builtin, and that body's frame is
+            # still being built. The instantiation worklist exists for exactly
+            # this, so the wrapper rides it.
+            self._pending.append((self._builtin_wrapper(name, sig, e),
+                                  list(self._chain)))
+        self.ctx.func_ref[id(e)] = name
+        t = func_type(sig.params, sig.ret)
+        self.ctx.set_type(e, t)
+        return t
+
+    def _builtin_wrapper(self, name: str, sig: FunctionSig, e: A.Expr) -> A.Function:
+        """`fn name(a0, ...) { return name(a0, ...); }`, as an AST.
+
+        The call inside is an ordinary builtin call and lowers to the same
+        instructions a direct call does, so the wrapper costs one frame and
+        nothing else. It is also why `panic` wrapping `panic` is not recursion.
+
+        It takes the position of the first use, since it has no source of its
+        own and where the value was taken is the most useful thing a backtrace
+        could point at.
+        """
+        where = {"line": e.line, "col": e.col}
+        params = [A.Param(f"a{i}", t.name, **where) for i, t in enumerate(sig.params)]
+        call = A.Call(name, [A.Identifier(p.name, **where) for p in params], **where)
+        body = [A.Return(call, **where) if sig.ret != Void
+                else A.ExprStmt(call, **where)]
+        return A.Function(name, params, None if sig.ret == Void else sig.ret.name,
+                          body, source_file=self._current_file, **where)
+
     def _variant_template(self, name: str):
         """`(EnumDef, VariantDef)` for a name like `Option::Some` whose enum is
         a template, else None. A variant is written with the enum's declared
@@ -1310,12 +1363,7 @@ class SemanticAnalyzer:
                 sig = self.ctx.functions.get(e.name)
                 if sig is not None:
                     if sig.is_builtin:
-                        raise SemanticError(
-                            f"'{e.name}' is a builtin, not a function value: "
-                            f"builtins compile to instructions and have no "
-                            f"index to refer to",
-                            e.line, e.col,
-                        )
+                        return self._builtin_value(e.name, sig, e)
                     t = func_type(sig.params, sig.ret)
                     self.ctx.func_ref[id(e)] = e.name
                     self.ctx.set_type(e, t)

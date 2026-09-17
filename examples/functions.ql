@@ -39,7 +39,7 @@ fn show(n: int): void { print(n); print(" "); }
 fn main(): int {
     let xs: List<int> = list_empty();
     xs = list_push(list_push(list_push(xs, 3), 2), 1);
-    println(list_show(xs, show_int));
+    println(list_show(xs, int_to_str));
 
     println(fold(xs, 0, add));         // 6
     println(list_fold(xs, 1, mul));    // 6 — the library's, same shape
@@ -59,8 +59,8 @@ fn main(): int {
     let op: fn(int, int): int = times.apply;
     println(op(6, 7));           // 42
 
-    println(list_show(list_map(xs, double), show_int));
-    println(list_show(list_filter(xs, is_odd), show_int));
+    println(list_show(list_map(xs, double), int_to_str));
+    println(list_show(list_filter(xs, is_odd), int_to_str));
     list_foreach(xs, show);
     println("");
     return 0;

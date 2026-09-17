@@ -298,7 +298,7 @@ class TestList(QuinTestCase):
         self.assertPrints(lists(
             "let l: List<int> = list_push(list_push(list_of(3), 2), 1);\n"
             "let r: List<int> = list_reverse(l);\n"
-            "println(list_show(l, show_int)); println(list_show(r, show_int));"),
+            "println(list_show(l, int_to_str)); println(list_show(r, int_to_str));"),
             "[1, 2, 3]", "[3, 2, 1]")
 
     def test_tail_shares_the_rest_of_the_list(self):
@@ -309,9 +309,9 @@ class TestList(QuinTestCase):
 
     def test_printing(self):
         self.assertPrints(lists(
-            "println(list_show(list_empty::<int>(), show_int));\n"
-            "println(list_show(list_of(9), show_int));\n"
-            "println(list_show(list_push(list_of(2), 1), show_int));"),
+            "println(list_show(list_empty::<int>(), int_to_str));\n"
+            "println(list_show(list_of(9), int_to_str));\n"
+            "println(list_show(list_push(list_of(2), 1), int_to_str));"),
             "[]", "[9]", "[1, 2]")
 
     def test_a_long_list_survives_collection(self):
@@ -391,14 +391,14 @@ class TestVec(QuinTestCase):
         self.assertPrints(vecs(
             "let v: Vec<int> = vec_new(4);\n"
             "for (let i = 1; i < 5; i = i + 1) { vec_push(v, i); }\n"
-            "vec_reverse(v); println(vec_show(v, show_int));"),
+            "vec_reverse(v); println(vec_show(v, int_to_str));"),
             "[4, 3, 2, 1]")
 
     def test_reverse_of_an_odd_length(self):
         self.assertPrints(vecs(
             "let v: Vec<int> = vec_new(4);\n"
             "vec_push(v, 1); vec_push(v, 2); vec_push(v, 3);\n"
-            "vec_reverse(v); println(vec_show(v, show_int));"),
+            "vec_reverse(v); println(vec_show(v, int_to_str));"),
             "[3, 2, 1]")
 
     def test_a_vector_is_a_reference(self):
@@ -423,9 +423,9 @@ class TestVec(QuinTestCase):
     def test_printing(self):
         self.assertPrints(vecs(
             "let v: Vec<int> = vec_new(2);\n"
-            "println(vec_show(v, show_int));\n"
-            "vec_push(v, 7); println(vec_show(v, show_int));\n"
-            "vec_push(v, 8); println(vec_show(v, show_int));"),
+            "println(vec_show(v, int_to_str));\n"
+            "vec_push(v, 7); println(vec_show(v, int_to_str));\n"
+            "vec_push(v, 8); println(vec_show(v, int_to_str));"),
             "[]", "[7]", "[7, 8]")
 
     def test_the_block_survives_a_collection_that_moves_it(self):
@@ -503,14 +503,14 @@ class TestOneContainerManyElements(QuinTestCase):
         self.assertPrints(vecs(
             "let v: Vec<int> = vec_new(2);\n"
             "vec_push(v, 1); vec_push(v, 2);\n"
-            "println(vec_show(vec_map(v, show_int), show_str));"),
+            "println(vec_show(vec_map(v, int_to_str), show_str));"),
             "[1, 2]")
 
     def test_map_from_references_to_values(self):
         self.assertPrints(vecs(
             'let v: Vec<str> = vec_new(2);\n'
             'vec_push(v, "abc"); vec_push(v, "de");\n'
-            'println(vec_show(vec_map(v, width), show_int));')
+            'println(vec_show(vec_map(v, width), int_to_str));')
             + "fn width(s: str): int { return str_len(s); }\n",
             "[3, 2]")
 
@@ -518,7 +518,7 @@ class TestOneContainerManyElements(QuinTestCase):
         self.assertPrints(vecs(
             "let v: Vec<int> = vec_new(4);\n"
             "for (let i = 1; i <= 6; i = i + 1) { vec_push(v, i); }\n"
-            "println(vec_show(vec_filter(v, even), show_int));\n"
+            "println(vec_show(vec_filter(v, even), int_to_str));\n"
             "println(vec_fold(v, 0, add));\n"
             "println(vec_any(v, even)); println(vec_all(v, even));")
             + "fn even(n: int): bool { return n % 2 == 0; }\n"
@@ -530,15 +530,15 @@ class TestOneContainerManyElements(QuinTestCase):
         self.assertPrints(lists(
             'let l: List<int> = list_push(list_push(list_of(3), 2), 1);\n'
             'println(list_fold(l, "", join));')
-            + 'fn join(acc: str, n: int): str { return acc + show_int(n); }\n',
+            + 'fn join(acc: str, n: int): str { return acc + int_to_str(n); }\n',
             "123")
 
     def test_try_get_reports_absence_instead_of_panicking(self):
         self.assertPrints(vecs(
             "let v: Vec<int> = vec_new(1);\n"
             "vec_push(v, 5);\n"
-            "println(option_show(vec_try_get(v, 0), show_int));\n"
-            "println(option_show(vec_try_get(v, 9), show_int));"),
+            "println(option_show(vec_try_get(v, 0), int_to_str));\n"
+            "println(option_show(vec_try_get(v, 9), int_to_str));"),
             "Some(5)", "None")
 
     def test_each_instantiation_keeps_its_own_collector_layout(self):
@@ -555,7 +555,7 @@ class TestOneContainerManyElements(QuinTestCase):
     def test_strings_in_a_vector_survive_collection(self):
         self.assertPrints(vecs(
             'let v: Vec<str> = vec_new(2);\n'
-            'for (let i = 0; i < 20; i = i + 1) { vec_push(v, "s" + show_int(i)); }\n'
+            'for (let i = 0; i < 20; i = i + 1) { vec_push(v, "s" + int_to_str(i)); }\n'
             'gc();\n'
             'println(vec_get(v, 0)); println(vec_get(v, 19)); println(vec_len(v));'),
             "s0", "s19", "20")
@@ -580,7 +580,7 @@ class TestOptionAndResult(QuinTestCase):
             'let b: Option<int> = Option::None;\n'
             'println(option_is_some(a)); println(option_is_none(b));\n'
             'println(option_unwrap(a)); println(option_unwrap_or(b, 0 - 1));\n'
-            'println(option_show(option_map(a, show_int), show_str));'),
+            'println(option_show(option_map(a, int_to_str), show_str));'),
             "true", "true", "4", "-1", "Some(4)")
 
     def test_unwrapping_none_panics(self):
@@ -594,23 +594,23 @@ class TestOptionAndResult(QuinTestCase):
             'let bad: Result<int, str> = Result::Err("nope");\n'
             'println(result_is_ok(ok)); println(result_is_err(bad));\n'
             'println(result_unwrap_or(bad, 0));\n'
-            'println(result_show(ok, show_int, show_str));\n'
-            'println(result_show(bad, show_int, show_str));'),
+            'println(result_show(ok, int_to_str, show_str));\n'
+            'println(result_show(bad, int_to_str, show_str));'),
             "true", "true", "0", "Ok(3)", "Err(nope)")
 
     def test_result_narrows_to_option(self):
         self.assertPrints(program(["string", "result"],
             'let ok: Result<int, str> = Result::Ok(3);\n'
             'let bad: Result<int, str> = Result::Err("nope");\n'
-            'println(option_show(result_ok(ok), show_int));\n'
-            'println(option_show(result_ok(bad), show_int));\n'
+            'println(option_show(result_ok(ok), int_to_str));\n'
+            'println(option_show(result_ok(bad), int_to_str));\n'
             'println(option_show(result_err(bad), show_str));'),
             "Some(3)", "None", "Some(nope)")
 
     def test_an_error_type_that_is_not_a_string(self):
         self.assertPrints(program(["string", "result"],
             'let r: Result<str, int> = Result::Err(404);\n'
-            'println(result_show(r, show_str, show_int));'),
+            'println(result_show(r, show_str, int_to_str));'),
             "Err(404)")
 
 

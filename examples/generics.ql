@@ -44,7 +44,7 @@ fn pair_of<A, B>(first: A, second: B): Pair<A, B> {
     return Pair { first: first, second: second };
 }
 
-fn describe(n: int): str { return "#" + show_int(n); }
+fn describe(n: int): str { return "#" + int_to_str(n); }
 fn width(s: str): int { return str_len(s); }
 fn longer(best: int, s: str): int {
     if (str_len(s) > best) {
@@ -68,7 +68,7 @@ fn main(): int {
     gc();
 
     println(vec_show(names, show_str));
-    println(vec_show(widths, show_int));
+    println(vec_show(widths, int_to_str));
 
     // The accumulator type is free of the element type: str elements, int total.
     println(reduced(names, 0, longer));

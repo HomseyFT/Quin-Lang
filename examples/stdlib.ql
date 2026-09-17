@@ -51,11 +51,11 @@ fn main(): int {
     for (let i = 5; i > 0; i = i - 1) {
         l = list_push(l, i);
     }
-    println(list_show(l, show_int));              // [1, 2, 3, 4, 5]
+    println(list_show(l, int_to_str));              // [1, 2, 3, 4, 5]
     println(list_sum(l));                         // 15
     println(list_max(l));                         // 5
-    println(list_show(list_reverse(l), show_int)); // [5, 4, 3, 2, 1]
-    println(list_show(l, show_int));              // unchanged
+    println(list_show(list_reverse(l), int_to_str)); // [5, 4, 3, 2, 1]
+    println(list_show(l, int_to_str));              // unchanged
 
     println("-- vec --");
     // A vector is a reference, so push is visible to whoever else holds it,
@@ -64,13 +64,13 @@ fn main(): int {
     for (let i = 1; i < 8; i = i + 1) {
         vec_push(v, i * i);
     }
-    println(vec_show(v, show_int));   // [1, 4, 9, 16, 25, 36, 49]
+    println(vec_show(v, int_to_str));   // [1, 4, 9, 16, 25, 36, 49]
     println(vec_len(v));              // 7
     println(vec_capacity(v));         // 8 — grew from 2
     println(vec_sum(v));              // 140
     println(vec_pop(v));              // 49
     vec_reverse(v);
-    println(vec_show(v, show_int));   // [36, 25, 16, 9, 4, 1]
+    println(vec_show(v, int_to_str));   // [36, 25, 16, 9, 4, 1]
 
     println("-- one container, any element --");
     // The same Vec at a reference element type. Nothing in std was written
@@ -85,15 +85,15 @@ fn main(): int {
     println(vec_len(vec_filter(words, is_long)));
 
     println("-- higher order --");
-    println(vec_show(vec_map(v, square), show_int));
-    println(vec_show(vec_filter(v, even), show_int));
+    println(vec_show(vec_map(v, square), int_to_str));
+    println(vec_show(vec_filter(v, even), int_to_str));
     println(vec_fold(v, 0, add));
-    println(option_show(vec_try_get(v, 99), show_int));  // None, not a panic
+    println(option_show(vec_try_get(v, 99), int_to_str));  // None, not a panic
 
     gc();
-    println(vec_show(v, show_int));      // survives being moved
+    println(vec_show(v, int_to_str));      // survives being moved
     println(vec_show(words, show_str));  // and so do its strings
-    println(list_show(l, show_int));
+    println(list_show(l, int_to_str));
 
     return 0;
 }

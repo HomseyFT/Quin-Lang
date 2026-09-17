@@ -153,12 +153,13 @@ class TestTypeChecking(QuinTestCase):
             "fn main(): int { let n: int = 3; println(n(1)); return 0; }",
             "not a function")
 
-    def test_a_builtin_is_not_a_function_value(self):
-        # Builtins lower to instructions at the call site, so there is no index
-        # to refer to. Saying so beats 'undeclared'.
+    def test_a_builtin_off_the_allowlist_is_refused(self):
+        # array_push's real shape is settled in sema -- an int[N] that cannot
+        # be a parameter -- so there is no fixed signature to wrap. Saying that
+        # beats 'undeclared'.
         self.assertCompileError(
-            "fn main(): int { let f: fn(str): int = str_len; return 0; }",
-            "is a builtin, not a function value")
+            "fn main(): int { let f = array_push; return 0; }",
+            "cannot be used as a function value")
 
     def test_an_unknown_name_is_still_undeclared(self):
         self.assertCompileError(
@@ -233,7 +234,7 @@ class TestStdList(QuinTestCase):
 
     def render(self, expr: str) -> str:
         return (self.LIST + "fn main(): int { println(list_show(" + expr
-                + ", show_int)); return 0; }")
+                + ", int_to_str)); return 0; }")
 
     def test_map(self):
         self.assertPrints(self.render("list_map(xs(), double)"), "[2, 4, 6]")
@@ -248,7 +249,7 @@ class TestStdList(QuinTestCase):
         self.assertPrints(
             self.LIST + "fn none(n: int): bool { return false; }\n"
                         "fn main(): int { println(list_show(list_filter(xs(), none),"
-                        " show_int)); return 0; }",
+                        " int_to_str)); return 0; }",
             "[]")
 
     def test_foreach(self):
@@ -261,23 +262,125 @@ class TestStdList(QuinTestCase):
         self.assertPrints(
             self.LIST + "fn main(): int { let l: List<int> = xs();"
                         " list_map(l, double);"
-                        " println(list_show(l, show_int)); return 0; }",
+                        " println(list_show(l, int_to_str)); return 0; }",
             "[1, 2, 3]")
 
     def test_fold_over_an_accumulator_of_another_type(self):
         # The pairing generics made possible: a function value whose parameter
         # types are bound at the call rather than written into the library.
         self.assertPrints(
-            self.LIST + 'fn join(acc: str, n: int): str { return acc + "." + show_int(n); }\n'
+            self.LIST + 'fn join(acc: str, n: int): str { return acc + "." + int_to_str(n); }\n'
                         'fn main(): int { println(list_fold(xs(), "x", join)); return 0; }',
             "x.1.2.3")
 
     def test_map_changes_the_element_type(self):
         self.assertPrints(
-            self.LIST + 'fn tag(n: int): str { return "n" + show_int(n); }\n'
+            self.LIST + 'fn tag(n: int): str { return "n" + int_to_str(n); }\n'
                         "fn main(): int { println(list_show(list_map(xs(), tag),"
                         " show_str)); return 0; }",
             "[n1, n2, n3]")
+
+
+class TestBuiltinsAsValues(QuinTestCase):
+    """An allowlisted builtin may be handed over, through a generated wrapper.
+
+    A builtin lowers to instructions and has no entry in the function table, so
+    one is generated to hold the index -- but only for a builtin that is
+    allowlisted, and only for one a program actually hands over.
+    """
+
+    APPLY = "fn apply(f: fn(int): str, n: int): str { return f(n); }\n"
+
+    def emitted(self, source: str):
+        return [f.name for f in compile_source(source).functions]
+
+    def test_a_builtin_can_be_passed_and_called_through(self):
+        self.assertPrints(
+            self.APPLY + "fn main(): int { println(apply(int_to_str, 42)); return 0; }",
+            "42")
+
+    def test_a_builtin_can_be_stored_in_a_variable(self):
+        self.assertPrints(
+            "fn main(): int { let f: fn(int): str = int_to_str;"
+            " println(f(7)); return 0; }",
+            "7")
+
+    def test_a_builtin_can_be_a_struct_field(self):
+        self.assertPrints(
+            "struct Renderer { show: fn(int): str }\n"
+            "fn main(): int { let r: Renderer = Renderer { show: int_to_str };"
+            " let f: fn(int): str = r.show; println(f(9)); return 0; }",
+            "9")
+
+    def test_a_multi_argument_builtin(self):
+        self.assertPrints(
+            "fn main(): int { let f: fn(str, int, int): str = str_slice;"
+            ' println(f("abcdef", 1, 4)); return 0; }',
+            "bcd")
+
+    def test_a_void_builtin(self):
+        self.assertPrints(
+            "fn main(): int { let f: fn(): void = gc; f();"
+            ' println("collected"); return 0; }',
+            "collected")
+
+    def test_nothing_is_generated_unless_one_is_used_as_a_value(self):
+        # The whole reason the allowlist is not simply compiled in.
+        self.assertEqual(
+            self.emitted("fn main(): int { println(int_to_str(5)); return 0; }"),
+            ["main"])
+
+    def test_a_wrapper_appears_when_one_is(self):
+        self.assertIn("int_to_str", self.emitted(
+            self.APPLY + "fn main(): int { println(apply(int_to_str, 1)); return 0; }"))
+
+    def test_only_one_wrapper_however_many_uses(self):
+        names = self.emitted(
+            self.APPLY +
+            "fn main(): int { println(apply(int_to_str, 1));"
+            " println(apply(int_to_str, 2));"
+            " let g: fn(int): str = int_to_str; println(g(3)); return 0; }")
+        self.assertEqual([n for n in names if n == "int_to_str"], ["int_to_str"])
+
+    def test_a_direct_call_still_lowers_to_the_opcode(self):
+        # The wrapper is for the value, not for the call: a direct call pays
+        # nothing for one existing.
+        program = compile_source(
+            self.APPLY +
+            "fn main(): int { println(apply(int_to_str, 1));"
+            " println(int_to_str(2)); return 0; }")
+        self.assertIn(OpCode.STR_FROM_INT, [i.op for i in program.code])
+
+    def test_the_wrapper_carries_the_builtin_name(self):
+        # Which is what a backtrace through it should say.
+        program = compile_source(
+            self.APPLY + "fn main(): int { println(apply(int_to_str, 1)); return 0; }")
+        wrapper = next(f for f in program.functions if f.name == "int_to_str")
+        self.assertEqual(wrapper.num_params, 1)
+
+    def test_it_reaches_the_standard_library(self):
+        # The case this exists for: no show_int in sight.
+        self.assertPrints(
+            'include "std/vec.ql";\n'
+            "fn main(): int {\n"
+            "    let v: Vec<int> = vec_new(2);\n"
+            "    vec_push(v, 1); vec_push(v, 2);\n"
+            "    println(vec_show(v, int_to_str));\n"
+            "    return 0;\n"
+            "}\n",
+            "[1, 2]")
+
+    def test_a_builtin_maps_across_element_types(self):
+        self.assertPrints(
+            'include "std/vec.ql";\n'
+            "fn main(): int {\n"
+            "    let v: Vec<int> = vec_new(2);\n"
+            "    vec_push(v, 10); vec_push(v, 200);\n"
+            "    let lens: Vec<int> = vec_map(vec_map(v, int_to_str), str_len);\n"
+            "    println(vec_show(lens, int_to_str));\n"
+            "    return 0;\n"
+            "}\n",
+            "[2, 3]")
 
 
 if __name__ == "__main__":
